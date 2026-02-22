@@ -36,6 +36,7 @@ public enum SandboxType
 public class FileSystemSettings
 {
     public List<string> AllowedDirectories { get; set; } = new();
+    public List<string> ReadOnlyDirectories { get; set; } = new();
     public int MaxFileSizeMB { get; set; } = 10;
 }
 
