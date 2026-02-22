@@ -125,18 +125,22 @@ internal class Program
             apiKey: settings.AI.ApiKey,
             endpoint: new Uri(settings.AI.Endpoint));
 
-        // プラグインを登録
+        // サービスを取得
         var pathValidator = serviceProvider.GetRequiredService<PathValidator>();
-        var commandValidator = serviceProvider.GetRequiredService<CommandValidator>();
-        var urlValidator = serviceProvider.GetRequiredService<UrlValidator>();
         var powerShellExecutor = serviceProvider.GetRequiredService<IPowerShellExecutor>();
         var browserManager = serviceProvider.GetRequiredService<IBrowserManager>();
 
-        builder.Plugins.AddFromType<RestrictedFileSystemPlugin>();
-        builder.Plugins.AddFromType<RestrictedPowerShellPlugin>();
-        builder.Plugins.AddFromType<RestrictedBrowserPlugin>();
+        // プラグインを明示的にインスタンス化して登録
+        var kernel = builder.Build();
+        kernel.Plugins.AddFromObject(new RestrictedFileSystemPlugin(pathValidator), "FileSystem");
+        kernel.Plugins.AddFromObject(new RestrictedPowerShellPlugin(powerShellExecutor), "PowerShell");
+        kernel.Plugins.AddFromObject(new RestrictedBrowserPlugin(browserManager), "Browser");
+        kernel.Plugins.AddFromObject(new WebCrawlerPlugin(browserManager), "WebCrawler");
+        kernel.Plugins.AddFromObject(new BrowserActionsPlugin(browserManager), "BrowserActions");
+        kernel.Plugins.AddFromObject(new AdvancedBrowserPlugin(browserManager), "AdvancedBrowser");
+        kernel.Plugins.AddFromObject(new StructuredDataExtractionPlugin(browserManager, kernel), "DataExtraction");
 
-        return builder.Build();
+        return kernel;
     }
 
     private static ChatCompletionAgent CreateAgent(IServiceProvider serviceProvider, ClawleashSettings settings)
@@ -149,11 +153,55 @@ internal class Program
             Instructions = """
                 あなたはClawleash（クラウリッシュ）エージェントです。
                 OpenClow風の自律的なAIアシスタントとして、ユーザーのタスクを支援します。
+                Firecrawl/OpenCraw風のWebスクレイピング・クローリング機能と高度なブラウザ操作機能を備えています。
 
                 ## 能力
-                - ファイル操作: 許可されたディレクトリ内でのファイル読み書き、一覧取得
-                - PowerShell実行: 許可されたコマンドの実行
-                - ブラウザ操作: Webページへのアクセス、スクリーンショット撮影、要素操作
+                ### ファイル操作
+                - 許可されたディレクトリ内でのファイル読み書き、一覧取得
+
+                ### PowerShell実行
+                - 許可されたコマンドの実行
+
+                ### ブラウザ操作（基本）
+                - Webページへのアクセス、スクリーンショット撮影
+                - 要素のクリック、テキスト入力、フォーム送信
+                - JavaScript実行、ページテキスト取得
+
+                ### Webクローラー機能（Firecrawl風）
+                - **ScrapeUrl**: URLをスクレイプしてMarkdown形式でコンテンツを取得
+                - **CrawlWebsite**: Webサイト全体をクロールして複数ページのコンテンツを取得
+                - **MapWebsite**: サイトマップ（全URL一覧）を高速に取得
+                - **SearchWeb**: Webを検索して結果を取得
+                - **BatchScrape**: 複数のURLを一括スクレイプ
+                - **GetPageMarkdown**: 現在のページをMarkdown形式で取得
+                - **ExtractLinks**: ページからリンクを抽出
+                - **ExtractMetadata**: ページのメタデータを抽出
+
+                ### ブラウザアクション
+                - **スクロール**: ページのスクロール、最下部への移動
+                - **待機**: 要素表示待機、時間待機、ページ読み込み待機
+                - **キーボード**: キー入力（Enter, Tab, Escape など）
+                - **ナビゲーション**: 戻る、進む、リロード
+                - **その他**: ホバー、ファイルアップロード
+                - **ExecuteActions**: 複数のアクションを順番に実行
+
+                ### 高度なブラウザ操作（AdvancedBrowser）
+                - **Cookie/ストレージ操作**: Cookie、LocalStorage、SessionStorageの取得・設定
+                - **フォーム操作**: セレクトボックス、チェックボックス、ラジオボタン
+                - **マウス操作**: ダブルクリック、右クリック、ドラッグ＆ドロップ
+                - **テキスト選択**: テキストの選択、コピー、ペースト
+                - **iframe操作**: iframe内のコンテンツ取得、要素操作
+                - **テキスト検索**: ページ内テキストの検索・ハイライト
+                - **テーブル抽出**: テーブルデータの抽出
+
+                ### 構造化データ抽出（DataExtraction）
+                - **ExtractStructuredData**: AIを使った構造化データ抽出
+                - **ExtractWithSchema**: スキーマベースのデータ抽出
+                - **ExtractProductInfo**: 商品情報の抽出
+                - **ExtractArticleInfo**: 記事・ニュース情報の抽出
+                - **ExtractContactInfo**: 連絡先情報の抽出
+                - **SummarizePage**: ページ内容の要約
+                - **AnalyzePageContent**: ページ内容の分析・質問応答
 
                 ## セキュリティガイドライン
                 - 常にセキュリティを最優先してください
@@ -168,9 +216,13 @@ internal class Program
                 - 不明な点はユーザーに確認してください
 
                 ## 利用可能なプラグイン
-                - RestrictedFileSystemPlugin: ファイルシステム操作
-                - RestrictedPowerShellPlugin: PowerShellコマンド実行
-                - RestrictedBrowserPlugin: ブラウザ操作
+                - FileSystem: ファイルシステム操作
+                - PowerShell: PowerShellコマンド実行
+                - Browser: ブラウザ操作（基本）
+                - WebCrawler: Webクローラー・スクレイパー機能
+                - BrowserActions: 高度なブラウザアクション
+                - AdvancedBrowser: Cookie/ストレージ、フォーム、マウス操作など
+                - DataExtraction: AIを使った構造化データ抽出
 
                 ユーザーのリクエストに対して、安全かつ効率的にタスクを実行してください。
                 """,
