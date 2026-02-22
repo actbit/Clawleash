@@ -146,6 +146,7 @@ internal class Program
         // プラグインを明示的にインスタンス化して登録
         var kernel = builder.Build();
         kernel.Plugins.AddFromObject(new RestrictedFileSystemPlugin(pathValidator), "FileSystem");
+        kernel.Plugins.AddFromObject(new FileOperationsPlugin(pathValidator), "FileOperations");
         kernel.Plugins.AddFromObject(new RestrictedPowerShellPlugin(powerShellExecutor), "PowerShell");
         kernel.Plugins.AddFromObject(new RestrictedBrowserPlugin(browserManager), "Browser");
         kernel.Plugins.AddFromObject(new WebCrawlerPlugin(browserManager), "WebCrawler");
