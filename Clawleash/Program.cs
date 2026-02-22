@@ -1,0 +1,241 @@
+using Clawleash.Configuration;
+using Clawleash.Plugins;
+using Clawleash.Sandbox;
+using Clawleash.Security;
+using Clawleash.Services;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.Agents;
+using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
+
+namespace Clawleash;
+
+/// <summary>
+/// Clawleash - OpenClow風の自律エージェント
+/// Semantic Kernel Agent Frameworkとサンドボックス環境による安全な実行を提供
+/// </summary>
+internal class Program
+{
+    private static async Task Main(string[] args)
+    {
+        Console.WriteLine("================================");
+        Console.WriteLine("   Clawleash Agent v1.0");
+        Console.WriteLine("   OpenClow-style AI Agent");
+        Console.WriteLine("================================\n");
+
+        try
+        {
+            // 設定を読み込み
+            var settings = LoadSettings();
+
+            // API Keyの確認
+            if (string.IsNullOrEmpty(settings.AI.ApiKey))
+            {
+                Console.WriteLine("エラー: appsettings.json で AI.ApiKey を設定してください");
+                Console.WriteLine("環境変数 CLAWLEASH_API_KEY でも設定可能です");
+
+                // 環境変数から取得を試行
+                var envApiKey = Environment.GetEnvironmentVariable("CLAWLEASH_API_KEY");
+                if (!string.IsNullOrEmpty(envApiKey))
+                {
+                    settings.AI.ApiKey = envApiKey;
+                    Console.WriteLine("環境変数からAPI Keyを取得しました");
+                }
+                else
+                {
+                    Console.Write("\nAPI Keyを入力してください: ");
+                    var inputKey = Console.ReadLine();
+                    if (string.IsNullOrEmpty(inputKey))
+                    {
+                        return;
+                    }
+                    settings.AI.ApiKey = inputKey;
+                }
+            }
+
+            // DIコンテナを構築
+            var serviceProvider = ConfigureServices(settings);
+
+            // エージェントを作成
+            var agent = CreateAgent(serviceProvider, settings);
+
+            // チャットインターフェースを開始
+            await RunChatInterfaceAsync(serviceProvider, agent);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"\n致命的エラー: {ex.Message}");
+            Console.WriteLine($"スタックトレース: {ex.StackTrace}");
+        }
+    }
+
+    private static ClawleashSettings LoadSettings()
+    {
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: true)
+            .AddJsonFile("appsettings.Development.json", optional: true)
+            .Build();
+
+        var settings = new ClawleashSettings();
+        configuration.Bind(settings);
+
+        return settings;
+    }
+
+    private static IServiceProvider ConfigureServices(ClawleashSettings settings)
+    {
+        var services = new ServiceCollection();
+
+        // 設定を登録
+        services.AddSingleton(settings);
+
+        // セキュリティ検証クラスを登録
+        services.AddSingleton<PathValidator>();
+        services.AddSingleton<CommandValidator>();
+        services.AddSingleton<UrlValidator>();
+
+        // サンドボックスプロバイダーを登録
+        services.AddSingleton<ISandboxProvider>(sp =>
+            SandboxFactory.Create(settings));
+
+        // サービスを登録
+        services.AddSingleton<IPowerShellExecutor, PowerShellExecutor>();
+        services.AddSingleton<IBrowserManager, BrowserManager>();
+
+        // Semantic Kernelを登録
+        services.AddSingleton<Kernel>(sp => BuildKernel(sp, settings));
+
+        // チャットインターフェースを登録
+        services.AddSingleton<IChatInterface, CliChatInterface>();
+        services.AddSingleton<ChatInterfaceManager>();
+
+        return services.BuildServiceProvider();
+    }
+
+    private static Kernel BuildKernel(IServiceProvider serviceProvider, ClawleashSettings settings)
+    {
+        var builder = Kernel.CreateBuilder();
+
+        // OpenAI互換APIを設定
+        builder.AddOpenAIChatCompletion(
+            modelId: settings.AI.ModelId,
+            apiKey: settings.AI.ApiKey,
+            endpoint: new Uri(settings.AI.Endpoint));
+
+        // プラグインを登録
+        var pathValidator = serviceProvider.GetRequiredService<PathValidator>();
+        var commandValidator = serviceProvider.GetRequiredService<CommandValidator>();
+        var urlValidator = serviceProvider.GetRequiredService<UrlValidator>();
+        var powerShellExecutor = serviceProvider.GetRequiredService<IPowerShellExecutor>();
+        var browserManager = serviceProvider.GetRequiredService<IBrowserManager>();
+
+        builder.Plugins.AddFromType<RestrictedFileSystemPlugin>();
+        builder.Plugins.AddFromType<RestrictedPowerShellPlugin>();
+        builder.Plugins.AddFromType<RestrictedBrowserPlugin>();
+
+        return builder.Build();
+    }
+
+    private static ChatCompletionAgent CreateAgent(IServiceProvider serviceProvider, ClawleashSettings settings)
+    {
+        var kernel = serviceProvider.GetRequiredService<Kernel>();
+
+        var agent = new ChatCompletionAgent
+        {
+            Name = "ClawleashAgent",
+            Instructions = """
+                あなたはClawleash（クラウリッシュ）エージェントです。
+                OpenClow風の自律的なAIアシスタントとして、ユーザーのタスクを支援します。
+
+                ## 能力
+                - ファイル操作: 許可されたディレクトリ内でのファイル読み書き、一覧取得
+                - PowerShell実行: 許可されたコマンドの実行
+                - ブラウザ操作: Webページへのアクセス、スクリーンショット撮影、要素操作
+
+                ## セキュリティガイドライン
+                - 常にセキュリティを最優先してください
+                - 許可されていないパスやURLには絶対にアクセスしないでください
+                - 危険なコマンドやスクリプトは実行しないでください
+                - ユーザーの機密情報を保護してください
+
+                ## 対話スタイル
+                - 丁寧で分かりやすい日本語で応答してください
+                - タスクの進行状況を適切に報告してください
+                - エラーが発生した場合は、原因と解決策を提案してください
+                - 不明な点はユーザーに確認してください
+
+                ## 利用可能なプラグイン
+                - RestrictedFileSystemPlugin: ファイルシステム操作
+                - RestrictedPowerShellPlugin: PowerShellコマンド実行
+                - RestrictedBrowserPlugin: ブラウザ操作
+
+                ユーザーのリクエストに対して、安全かつ効率的にタスクを実行してください。
+                """,
+            Kernel = kernel,
+            Arguments = new KernelArguments(
+                new OpenAIPromptExecutionSettings
+                {
+                    FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
+                })
+        };
+
+        return agent;
+    }
+
+    private static async Task RunChatInterfaceAsync(IServiceProvider serviceProvider, ChatCompletionAgent agent)
+    {
+        var chatInterface = serviceProvider.GetRequiredService<IChatInterface>();
+        var kernel = serviceProvider.GetRequiredService<Kernel>();
+
+        Console.WriteLine("チャットを開始します。終了するには 'exit' または 'quit' と入力してください\n");
+
+        // メッセージハンドラーを設定
+        async Task<string> HandleMessage(ChatMessageReceivedEventArgs e)
+        {
+            return await ProcessMessageAsync(agent, e.Content);
+        }
+
+        var manager = new ChatInterfaceManager(HandleMessage);
+        manager.AddInterface(chatInterface);
+
+        // インターフェースを開始
+        await manager.StartAllAsync();
+
+        // CLIモードでは同期的に待機
+        while (chatInterface.IsConnected)
+        {
+            await Task.Delay(100);
+        }
+
+        await manager.DisposeAsync();
+    }
+
+    private static async Task<string> ProcessMessageAsync(ChatCompletionAgent agent, string userMessage)
+    {
+        try
+        {
+            var chat = new AgentGroupChat(agent);
+
+            chat.AddChatMessage(new ChatMessageContent(AuthorRole.User, userMessage));
+
+            var responseBuilder = new System.Text.StringBuilder();
+
+            await foreach (var message in chat.InvokeAsync())
+            {
+                if (!string.IsNullOrEmpty(message.Content))
+                {
+                    responseBuilder.AppendLine(message.Content);
+                }
+            }
+
+            return responseBuilder.ToString().Trim();
+        }
+        catch (Exception ex)
+        {
+            return $"エラーが発生しました: {ex.Message}";
+        }
+    }
+}
