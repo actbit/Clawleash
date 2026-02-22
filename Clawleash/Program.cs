@@ -1,4 +1,5 @@
 using Clawleash.Configuration;
+using Clawleash.Models;
 using Clawleash.Plugins;
 using Clawleash.Sandbox;
 using Clawleash.Security;
@@ -105,6 +106,17 @@ internal class Program
         services.AddSingleton<IPowerShellExecutor, PowerShellExecutor>();
         services.AddSingleton<IBrowserManager, BrowserManager>();
 
+        // 自律エージェント設定を登録
+        services.AddSingleton(new AutonomousSettings
+        {
+            MaxSteps = 10,
+            MaxRetries = 3,
+            RequireApprovalForDangerousOperations = true,
+            RequireApprovalForFileDeletion = true,
+            RequireApprovalForFormSubmission = true,
+            StepDelayMs = 500
+        });
+
         // Semantic Kernelを登録
         services.AddSingleton<Kernel>(sp => BuildKernel(sp, settings));
 
@@ -129,6 +141,7 @@ internal class Program
         var pathValidator = serviceProvider.GetRequiredService<PathValidator>();
         var powerShellExecutor = serviceProvider.GetRequiredService<IPowerShellExecutor>();
         var browserManager = serviceProvider.GetRequiredService<IBrowserManager>();
+        var autonomousSettings = serviceProvider.GetRequiredService<AutonomousSettings>();
 
         // プラグインを明示的にインスタンス化して登録
         var kernel = builder.Build();
@@ -139,6 +152,7 @@ internal class Program
         kernel.Plugins.AddFromObject(new BrowserActionsPlugin(browserManager), "BrowserActions");
         kernel.Plugins.AddFromObject(new AdvancedBrowserPlugin(browserManager), "AdvancedBrowser");
         kernel.Plugins.AddFromObject(new StructuredDataExtractionPlugin(browserManager, kernel), "DataExtraction");
+        kernel.Plugins.AddFromObject(new AutonomousAgentPlugin(kernel, autonomousSettings), "AutonomousAgent");
 
         return kernel;
     }
@@ -203,11 +217,20 @@ internal class Program
                 - **SummarizePage**: ページ内容の要約
                 - **AnalyzePageContent**: ページ内容の分析・質問応答
 
+                ### 自律エージェント機能（AutonomousAgent）
+                - **ExecuteGoalAutonomously**: 目標を設定して自律的に計画・実行
+                - **PlanGoal**: 目標の計画だけを作成（実行しない）
+                - **PauseExecution/ResumeExecution/CancelExecution**: 実行制御
+                - **UpdateSettings/GetSettings**: 自律実行の設定変更
+                - **EvaluateLastExecution**: 最後の実行結果を評価
+
                 ## セキュリティガイドライン
                 - 常にセキュリティを最優先してください
                 - 許可されていないパスやURLには絶対にアクセスしないでください
                 - 危険なコマンドやスクリプトは実行しないでください
                 - ユーザーの機密情報を保護してください
+                - **重要**: ユーザーが意図しない操作は絶対にしないでください
+                - 削除、送信などの危険な操作は必ずユーザーの承認を得てください
 
                 ## 対話スタイル
                 - 丁寧で分かりやすい日本語で応答してください
@@ -223,6 +246,7 @@ internal class Program
                 - BrowserActions: 高度なブラウザアクション
                 - AdvancedBrowser: Cookie/ストレージ、フォーム、マウス操作など
                 - DataExtraction: AIを使った構造化データ抽出
+                - AutonomousAgent: 自律的な目標実行
 
                 ユーザーのリクエストに対して、安全かつ効率的にタスクを実行してください。
                 """,
