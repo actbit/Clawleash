@@ -10,6 +10,8 @@
 
 *Semantic Kernel × Playwright × Autonomous Agent Framework*
 
+English | [**日本語**](README.md)
+
 [Features](#-features) • [Installation](#-installation) • [Configuration](#-configuration) • [Usage](#-usage) • [Architecture](#-architecture)
 
 </div>
@@ -603,8 +605,8 @@ copies or substantial portions of the Software.
 
 <div align="center">
 
-**Made with ❤️ by Clawleash Team**
+**Made with ❤️ by actbit**
 
-[⬆ Back to Top](#-clawleash)
+English | [日本語](README.md) | [⬆ Back to Top](#-clawleash)
 
 </div>
