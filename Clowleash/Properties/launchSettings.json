@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Clowleash": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
