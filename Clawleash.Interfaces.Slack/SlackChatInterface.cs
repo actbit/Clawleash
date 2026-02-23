@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Clawleash.Abstractions.Services;
 using Microsoft.Extensions.Logging;
 
@@ -538,78 +539,127 @@ public class SlackChatInterface : IChatInterface
 
 internal class AuthTestResponse
 {
+    [JsonPropertyName("ok")]
     public bool Ok { get; set; }
+
+    [JsonPropertyName("user_id")]
     public string? UserId { get; set; }
+
+    [JsonPropertyName("user")]
     public string? User { get; set; }
+
+    [JsonPropertyName("team")]
     public string? Team { get; set; }
+
+    [JsonPropertyName("error")]
     public string? Error { get; set; }
 }
 
 internal class ChannelInfoResponse
 {
+    [JsonPropertyName("ok")]
     public bool Ok { get; set; }
+
     public SlackChannelInfo? Channel { get; set; }
 }
 
 internal class SlackChannelInfo
 {
+    [JsonPropertyName("id")]
     public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("is_private")]
     public bool IsPrivate { get; set; }
 }
 
 internal class ConversationsHistoryResponse
 {
+    [JsonPropertyName("ok")]
     public bool Ok { get; set; }
+
     public List<SlackMessage>? Messages { get; set; }
 }
 
 internal class SlackMessage
 {
+    [JsonPropertyName("ts")]
     public string Ts { get; set; } = string.Empty;
+
+    [JsonPropertyName("user")]
     public string User { get; set; } = string.Empty;
+
+    [JsonPropertyName("text")]
     public string Text { get; set; } = string.Empty;
+
+    [JsonPropertyName("thread_ts")]
     public string? ThreadTs { get; set; }
+
+    [JsonPropertyName("subtype")]
     public string? Subtype { get; set; }
+
+    [JsonPropertyName("bot_id")]
     public string? BotId { get; set; }
 }
 
 internal class UserInfoResponse
 {
+    [JsonPropertyName("ok")]
     public bool Ok { get; set; }
+
     public SlackUser? User { get; set; }
 }
 
 internal class SlackUser
 {
+    [JsonPropertyName("id")]
     public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
+
     public SlackUserProfile? Profile { get; set; }
 }
 
 internal class SlackUserProfile
 {
+    [JsonPropertyName("display_name")]
     public string? DisplayName { get; set; }
+
+    [JsonPropertyName("real_name")]
     public string? RealName { get; set; }
 }
 
 internal class PostMessageResponse
 {
+    [JsonPropertyName("ok")]
     public bool Ok { get; set; }
+
+    [JsonPropertyName("ts")]
     public string? Ts { get; set; }
+
+    [JsonPropertyName("error")]
     public string? Error { get; set; }
 }
 
 internal class ImOpenResponse
 {
+    [JsonPropertyName("ok")]
     public bool Ok { get; set; }
+
     public SlackChannelInfo? Channel { get; set; }
+
+    [JsonPropertyName("error")]
     public string? Error { get; set; }
 }
 
 internal class ChannelsListResponse
 {
+    [JsonPropertyName("ok")]
     public bool Ok { get; set; }
+
     public List<SlackChannelInfo>? Channels { get; set; }
 }
 
