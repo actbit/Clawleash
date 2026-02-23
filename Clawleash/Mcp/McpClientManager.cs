@@ -1,10 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
 using Clawleash.Sandbox;
-using Clawleash.Services;
 
 namespace Clawleash.Mcp;
 
@@ -328,8 +325,30 @@ public class McpClientManager : IDisposable
         await server.StdIn.WriteLineAsync(json);
         await server.StdIn.FlushAsync();
 
-        // レスポンスを読み込み
-        var responseLine = await server.StdOut.ReadLineAsync();
+        // タイムアウト付きでレスポンスを読み込み
+        using var cts = new CancellationTokenSource(server.Config.TimeoutMs);
+        string? responseLine;
+
+        try
+        {
+            // ReadLineAsyncはValueTaskを返すため、Taskに変換してタイムアウト処理
+            var readTask = server.StdOut.ReadLineAsync(cts.Token).AsTask();
+            var completedTask = await Task.WhenAny(readTask, Task.Delay(server.Config.TimeoutMs, cts.Token));
+
+            if (completedTask != readTask)
+            {
+                _logger.LogError("MCPリクエストがタイムアウト: {Method} ({Timeout}ms)", method, server.Config.TimeoutMs);
+                return null;
+            }
+
+            responseLine = await readTask;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogError("MCPリクエストがキャンセルされました: {Method}", method);
+            return null;
+        }
+
         if (string.IsNullOrEmpty(responseLine))
         {
             return null;
@@ -337,8 +356,8 @@ public class McpClientManager : IDisposable
 
         _logger.LogDebug("MCP Response: {Response}", responseLine);
 
-        // JsonDocumentを破棄しないように、クローンを作成して返す
-        var doc = JsonDocument.Parse(responseLine);
+        // JsonDocumentをusingで適切に破棄
+        using var doc = JsonDocument.Parse(responseLine);
         var root = doc.RootElement;
 
         if (root.TryGetProperty("error", out var error))
@@ -347,20 +366,17 @@ public class McpClientManager : IDisposable
                 ? msg.GetString()
                 : "Unknown error";
             _logger.LogError("MCPエラー: {Message}", message);
-            doc.Dispose();
             return null;
         }
 
         if (root.TryGetProperty("result", out var result))
         {
-            // クローンを作成して返す（元のdocは保持）
-            var clonedResult = result.Clone();
-            // 注: 実際の運用ではdocを適切に管理する必要がある
-            // 簡易実装としてクローンを返す
-            return clonedResult;
+            // Cloneではなく、JSON文字列として保存してから再パース
+            // これによりメモリリークを防ぐ
+            var resultJson = result.GetRawText();
+            return JsonDocument.Parse(resultJson).RootElement;
         }
 
-        doc.Dispose();
         return null;
     }
 

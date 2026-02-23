@@ -104,21 +104,35 @@ public class SkillLoader : IDisposable
         _watcher.Created += async (s, e) =>
         {
             if (!IsSkillFile(e.FullPath)) return;
-            _logger.LogInformation("新しいスキルを検出: {Path}", e.FullPath);
-            await Task.Delay(500); // ファイル書き込み完了待ち
-            await LoadFromFileAsync(e.FullPath);
+            try
+            {
+                _logger.LogInformation("新しいスキルを検出: {Path}", e.FullPath);
+                await Task.Delay(500); // ファイル書き込み完了待ち
+                await LoadFromFileAsync(e.FullPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "スキルファイルの自動ロードに失敗: {Path}", e.FullPath);
+            }
         };
 
         _watcher.Changed += async (s, e) =>
         {
             if (!IsSkillFile(e.FullPath)) return;
-            _logger.LogInformation("スキルが更新されました: {Path}", e.FullPath);
-            await Task.Delay(500);
-            // 再読み込み
-            var skill = await LoadFromFileAsync(e.FullPath);
-            if (skill != null)
+            try
             {
-                _logger.LogInformation("スキルを再読み込み: {Name}", skill.Name);
+                _logger.LogInformation("スキルが更新されました: {Path}", e.FullPath);
+                await Task.Delay(500);
+                // 再読み込み
+                var skill = await LoadFromFileAsync(e.FullPath);
+                if (skill != null)
+                {
+                    _logger.LogInformation("スキルを再読み込み: {Name}", skill.Name);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "スキルファイルの再読み込みに失敗: {Path}", e.FullPath);
             }
         };
 

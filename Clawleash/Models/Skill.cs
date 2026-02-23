@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Clawleash.Models;
@@ -81,11 +82,34 @@ public class Skill
 
             if (value != null)
             {
-                result = result.Replace($"{{{{{param.Name}}}}}", value.ToString());
+                var stringValue = ConvertToString(value);
+                result = result.Replace($"{{{{{param.Name}}}}}", stringValue);
             }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 値を文字列に変換（JsonElementなどの特殊型に対応）
+    /// </summary>
+    private static string ConvertToString(object value)
+    {
+        return value switch
+        {
+            JsonElement element => element.ValueKind switch
+            {
+                JsonValueKind.String => element.GetString() ?? "",
+                JsonValueKind.Number => element.ToString(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                JsonValueKind.Null => "",
+                _ => element.ToString()
+            },
+            string s => s,
+            null => "",
+            _ => value.ToString() ?? ""
+        };
     }
 }
 
