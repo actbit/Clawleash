@@ -122,71 +122,72 @@ public class WebRtcChatInterface : IChatInterface
     private void SetupSignalREventHandlers()
     {
         // 登録完了
-        _hubConnection!.On<string>("Registered", peerId =>
+        _hubConnection!.On<RegisteredEvent>("registered", data =>
         {
-            _localPeerId = peerId;
-            _logger?.LogInformation("Registered with signaling server. PeerId: {PeerId}", peerId);
+            _localPeerId = data.PeerId;
+            _logger?.LogInformation("Registered with signaling server. PeerId: {PeerId}", data.PeerId);
         });
 
         // 新規ピア登録通知
-        _hubConnection!.On<string, string, Dictionary<string, object>>("PeerRegistered", async (peerId, clientType, capabilities) =>
+        _hubConnection!.On<PeerRegisteredEvent>("peer-registered", async data =>
         {
-            _logger?.LogDebug("New peer registered: {PeerId} ({ClientType})", peerId, clientType);
+            _logger?.LogDebug("New peer registered: {PeerId} ({ClientType})", data.PeerId, data.ClientType);
 
             // 自動的に新しいピアに接続
-            if (capabilities.TryGetValue("e2ee", out var e2eeCap) && e2eeCap is bool supportsE2ee)
+            if (data.Capabilities != null &&
+                data.Capabilities.TryGetValue("e2ee", out var e2eeCap) && e2eeCap is bool supportsE2ee)
             {
                 if (supportsE2ee == _settings.EnableE2ee)
                 {
-                    await InitiatePeerConnectionAsync(peerId);
+                    await InitiatePeerConnectionAsync(data.PeerId);
                 }
             }
             else
             {
-                await InitiatePeerConnectionAsync(peerId);
+                await InitiatePeerConnectionAsync(data.PeerId);
             }
         });
 
         // Offer受信
-        _hubConnection!.On<string, string>("Offer", async (fromPeerId, sdp) =>
+        _hubConnection!.On<OfferEvent>("offer", async data =>
         {
-            await HandleOfferAsync(fromPeerId, sdp);
+            await HandleOfferAsync(data.FromPeerId, data.Sdp);
         });
 
         // Answer受信
-        _hubConnection!.On<string, string>("Answer", async (fromPeerId, sdp) =>
+        _hubConnection!.On<AnswerEvent>("answer", async data =>
         {
-            await HandleAnswerAsync(fromPeerId, sdp);
+            await HandleAnswerAsync(data.FromPeerId, data.Sdp);
         });
 
         // ICE候補受信
-        _hubConnection!.On<string, string, string, int>("IceCandidate", async (fromPeerId, candidate, sdpMid, sdpMlineIndex) =>
+        _hubConnection!.On<IceCandidateEvent>("ice-candidate", async data =>
         {
-            await HandleIceCandidateAsync(fromPeerId, candidate, sdpMid, sdpMlineIndex);
+            await HandleIceCandidateAsync(data.FromPeerId, data.Candidate, data.SdpMid, data.SdpMlineIndex);
         });
 
         // ピア接続完了
-        _hubConnection!.On<string>("PeerConnected", async peerId =>
+        _hubConnection!.On<PeerConnectedEvent>("peer-connected", async data =>
         {
-            await OnPeerConnectedAsync(peerId);
+            await OnPeerConnectedAsync(data.PeerId);
         });
 
         // ピア切断
-        _hubConnection!.On<string>("PeerDisconnected", peerId =>
+        _hubConnection!.On<PeerDisconnectedEvent>("peer-disconnected", data =>
         {
-            OnPeerDisconnected(peerId);
+            OnPeerDisconnected(data.PeerId);
         });
 
         // DataChannelメッセージ受信
-        _hubConnection!.On<string, string>("DataChannelMessage", async (fromPeerId, payloadBase64) =>
+        _hubConnection!.On<DataChannelMessageEvent>("datachannel-message", async data =>
         {
-            await HandleDataChannelMessageAsync(fromPeerId, payloadBase64);
+            await HandleDataChannelMessageAsync(data.FromPeerId, data.Payload);
         });
 
         // E2EE鍵交換
-        _hubConnection!.On<string, string, string>("E2eeKeyExchange", async (fromPeerId, sessionId, publicKeyBase64) =>
+        _hubConnection!.On<E2eeKeyExchangeEvent>("e2ee-key-exchange", async data =>
         {
-            await HandleE2eeKeyExchangeAsync(fromPeerId, sessionId, publicKeyBase64);
+            await HandleE2eeKeyExchangeAsync(data.FromPeerId, data.SessionId, data.PublicKey);
         });
     }
 
@@ -595,4 +596,64 @@ internal class PeerInfoResponse
     public string PeerId { get; set; } = string.Empty;
     public string ClientType { get; set; } = string.Empty;
     public Dictionary<string, object> Capabilities { get; set; } = new();
+}
+
+/// <summary>
+/// SignalRイベント用DTO
+/// </summary>
+internal class RegisteredEvent
+{
+    public string PeerId { get; set; } = string.Empty;
+    public bool Success { get; set; }
+}
+
+internal class PeerRegisteredEvent
+{
+    public string PeerId { get; set; } = string.Empty;
+    public string ClientType { get; set; } = string.Empty;
+    public Dictionary<string, object>? Capabilities { get; set; }
+}
+
+internal class OfferEvent
+{
+    public string FromPeerId { get; set; } = string.Empty;
+    public string Sdp { get; set; } = string.Empty;
+}
+
+internal class AnswerEvent
+{
+    public string FromPeerId { get; set; } = string.Empty;
+    public string Sdp { get; set; } = string.Empty;
+}
+
+internal class IceCandidateEvent
+{
+    public string FromPeerId { get; set; } = string.Empty;
+    public string Candidate { get; set; } = string.Empty;
+    public string SdpMid { get; set; } = string.Empty;
+    public int SdpMlineIndex { get; set; }
+}
+
+internal class PeerConnectedEvent
+{
+    public string PeerId { get; set; } = string.Empty;
+    public string? RemotePeerId { get; set; }
+}
+
+internal class PeerDisconnectedEvent
+{
+    public string PeerId { get; set; } = string.Empty;
+}
+
+internal class DataChannelMessageEvent
+{
+    public string FromPeerId { get; set; } = string.Empty;
+    public string Payload { get; set; } = string.Empty;
+}
+
+internal class E2eeKeyExchangeEvent
+{
+    public string FromPeerId { get; set; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
+    public string PublicKey { get; set; } = string.Empty;
 }
