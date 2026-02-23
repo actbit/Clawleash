@@ -70,7 +70,7 @@ public class InterfaceLoader : IDisposable
             _watcher = new FileSystemWatcher(_interfacesDirectory)
             {
                 Filter = "*.dll",
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Creation,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime,
                 IncludeSubdirectories = true
             };
 
@@ -78,7 +78,7 @@ public class InterfaceLoader : IDisposable
             _watcher.Deleted += OnDllDeleted;
             _watcher.Changed += OnDllChanged;
             _watcher.Renamed += OnDllRenamed;
-            _watcher.EnableRraisingEvents = true;
+            _watcher.EnableRaisingEvents = true;
 
             _logger?.LogInformation("FileSystemWatcher started for: {Directory}", _interfacesDirectory);
         }

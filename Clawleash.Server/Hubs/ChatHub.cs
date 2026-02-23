@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,8 +16,8 @@ public class ChatHub : Hub
 {
     private readonly ILogger<ChatHub> _logger;
     private readonly KeyManager _keyManager;
-    private static readonly Dictionary<string, ConnectedClient> _clients = new();
-    private static readonly Dictionary<string, string> _userChannels = new();
+    private static readonly ConcurrentDictionary<string, ConnectedClient> _clients = new();
+    private static readonly ConcurrentDictionary<string, string> _userChannels = new();
 
     public ChatHub(ILogger<ChatHub> logger, KeyManager keyManager)
     {
@@ -52,7 +53,7 @@ public class ChatHub : Hub
             }
         }
 
-        _userChannels.Remove(connectionId);
+        _userChannels.TryRemove(connectionId, out _);
         await base.OnDisconnectedAsync(exception);
     }
 
@@ -133,7 +134,7 @@ public class ChatHub : Hub
         var connectionId = Context.ConnectionId;
 
         await Groups.RemoveFromGroupAsync(connectionId, channelId);
-        _userChannels.Remove(connectionId);
+        _userChannels.TryRemove(connectionId, out _);
 
         _logger.LogDebug("Client {ConnectionId} left channel {ChannelId}", connectionId, channelId);
 

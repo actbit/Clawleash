@@ -1,3 +1,4 @@
+using System.Text;
 using Clawleash.Abstractions.Services;
 using Discord;
 using Discord.WebSocket;
