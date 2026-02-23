@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using Clawleash.Abstractions.Security;
 using Clawleash.Server.Security;
 using Microsoft.AspNetCore.SignalR;
 
@@ -10,7 +8,7 @@ namespace Clawleash.Server.Hubs;
 
 /// <summary>
 /// WebSocketチャット用SignalRハブ
-/// E2EE対応
+/// E2EE対応（チャンネルごとの共通鍵方式）
 /// </summary>
 public class ChatHub : Hub
 {
@@ -18,6 +16,7 @@ public class ChatHub : Hub
     private readonly KeyManager _keyManager;
     private static readonly ConcurrentDictionary<string, ConnectedClient> _clients = new();
     private static readonly ConcurrentDictionary<string, string> _userChannels = new();
+    private static readonly ConcurrentDictionary<string, ChannelInfo> _channels = new();
 
     public ChatHub(ILogger<ChatHub> logger, KeyManager keyManager)
     {
@@ -51,6 +50,19 @@ public class ChatHub : Hub
             {
                 _keyManager.RemoveSession(client.SessionId);
             }
+
+            // Leave all channels
+            foreach (var channelId in client.JoinedChannels)
+            {
+                if (_channels.TryGetValue(channelId, out var channel))
+                {
+                    channel.MemberIds.Remove(connectionId);
+                    if (channel.MemberIds.Count == 0)
+                    {
+                        _channels.TryRemove(channelId, out _);
+                    }
+                }
+            }
         }
 
         _userChannels.TryRemove(connectionId, out _);
@@ -58,7 +70,7 @@ public class ChatHub : Hub
     }
 
     /// <summary>
-    /// E2EE鍵交換開始
+    /// E2EE鍵交換開始（クライアント-サーバー間）
     /// </summary>
     public async Task<KeyExchangeResponse> StartKeyExchange()
     {
@@ -112,12 +124,55 @@ public class ChatHub : Hub
         await Groups.AddToGroupAsync(connectionId, channelId);
         _userChannels[connectionId] = channelId;
 
-        if (_clients.TryGetValue(connectionId, out var client))
+        ConnectedClient? client = null;
+        if (_clients.TryGetValue(connectionId, out var existingClient))
         {
+            client = existingClient;
             client.CurrentChannel = channelId;
+            client.JoinedChannels.Add(channelId);
         }
 
+        // チャンネル情報を取得または作成
+        var channel = _channels.GetOrAdd(channelId, _ => new ChannelInfo
+        {
+            ChannelId = channelId,
+            ChannelKey = RandomNumberGenerator.GetBytes(32) // AES-256鍵
+        });
+
+        channel.MemberIds.Add(connectionId);
+
         _logger.LogDebug("Client {ConnectionId} joined channel {ChannelId}", connectionId, channelId);
+
+        // チャンネル鍵をクライアントに送信（クライアントのセッション鍵で暗号化）
+        if (client != null && client.E2eeEnabled && !string.IsNullOrEmpty(client.SessionId))
+        {
+            var sessionKey = _keyManager.GetSharedSecret(client.SessionId);
+            if (sessionKey != null)
+            {
+                // チャンネル鍵をセッション鍵で暗号化
+                var encryptedChannelKey = EncryptChannelKey(channel.ChannelKey, sessionKey);
+
+                await Clients.Caller.SendAsync("ChannelKey", new
+                {
+                    channelId,
+                    encryptedKey = Convert.ToBase64String(encryptedChannelKey)
+                });
+
+                _logger.LogDebug("Sent encrypted channel key for {ChannelId} to {ConnectionId}", channelId, connectionId);
+            }
+        }
+        else
+        {
+            // E2EE無効の場合は平文で送信（開発/テスト用）
+            await Clients.Caller.SendAsync("ChannelKey", new
+            {
+                channelId,
+                encryptedKey = (string?)null,
+                plainKey = Convert.ToBase64String(channel.ChannelKey) // 警告: 本番環境では使用しない
+            });
+
+            _logger.LogWarning("Sent plain channel key for {ChannelId} (E2EE disabled)", channelId);
+        }
 
         await Clients.Group(channelId).SendAsync("UserJoined", new
         {
@@ -136,6 +191,16 @@ public class ChatHub : Hub
         await Groups.RemoveFromGroupAsync(connectionId, channelId);
         _userChannels.TryRemove(connectionId, out _);
 
+        if (_clients.TryGetValue(connectionId, out var client))
+        {
+            client.JoinedChannels.Remove(channelId);
+        }
+
+        if (_channels.TryGetValue(channelId, out var channel))
+        {
+            channel.MemberIds.Remove(connectionId);
+        }
+
         _logger.LogDebug("Client {ConnectionId} left channel {ChannelId}", connectionId, channelId);
 
         await Clients.Group(channelId).SendAsync("UserLeft", new
@@ -153,11 +218,18 @@ public class ChatHub : Hub
         var connectionId = Context.ConnectionId;
         var channelId = request.ChannelId ?? _userChannels.GetValueOrDefault(connectionId, "default");
 
+        // 送信者名を取得
+        var senderName = request.SenderName ?? "Anonymous";
+        if (_clients.TryGetValue(connectionId, out var client))
+        {
+            client.DisplayName = senderName;
+        }
+
         var message = new
         {
             messageId = Guid.NewGuid().ToString(),
             senderId = connectionId,
-            senderName = request.SenderName ?? "Anonymous",
+            senderName,
             content = request.Content,
             channelId,
             encrypted = request.Encrypted,
@@ -179,6 +251,27 @@ public class ChatHub : Hub
     {
         await Clients.Caller.SendAsync("Pong", DateTime.UtcNow);
     }
+
+    /// <summary>
+    /// チャンネル鍵をセッション鍵で暗号化
+    /// </summary>
+    private static byte[] EncryptChannelKey(byte[] channelKey, byte[] sessionKey)
+    {
+        var nonce = RandomNumberGenerator.GetBytes(12);
+        var ciphertext = new byte[channelKey.Length];
+        var tag = new byte[16];
+
+        using var aesGcm = new AesGcm(sessionKey, 16);
+        aesGcm.Encrypt(nonce, channelKey, ciphertext, tag);
+
+        // nonce + ciphertext + tag
+        var result = new byte[12 + ciphertext.Length + 16];
+        Buffer.BlockCopy(nonce, 0, result, 0, 12);
+        Buffer.BlockCopy(ciphertext, 0, result, 12, ciphertext.Length);
+        Buffer.BlockCopy(tag, 0, result, 12 + ciphertext.Length, 16);
+
+        return result;
+    }
 }
 
 /// <summary>
@@ -191,6 +284,18 @@ internal class ConnectedClient
     public string? SessionId { get; set; }
     public bool E2eeEnabled { get; set; }
     public string? CurrentChannel { get; set; }
+    public string DisplayName { get; set; } = "Anonymous";
+    public HashSet<string> JoinedChannels { get; set; } = new();
+}
+
+/// <summary>
+/// チャンネル情報
+/// </summary>
+internal class ChannelInfo
+{
+    public string ChannelId { get; set; } = string.Empty;
+    public byte[] ChannelKey { get; set; } = Array.Empty<byte>();
+    public HashSet<string> MemberIds { get; set; } = new();
 }
 
 /// <summary>

@@ -4,6 +4,7 @@ export class E2eeProvider {
   private privateKey: Uint8Array | null = null;
   private sessionKey: Uint8Array | null = null;
   private sessionId: string | null = null;
+  private channelKeys: Map<string, Uint8Array> = new Map();
 
   get isEncrypted(): boolean {
     return this.sessionKey !== null;
@@ -63,9 +64,66 @@ export class E2eeProvider {
     this.sessionKey = new Uint8Array(hash);
   }
 
-  async encrypt(plaintext: string): Promise<string> {
+  /// <summary>
+  /// 暗号化されたチャンネル鍵を設定
+  /// </summary>
+  async setChannelKey(channelId: string, encryptedKeyBase64: string): Promise<void> {
     if (!this.sessionKey) {
       throw new Error('Session key not established');
+    }
+
+    const encryptedData = this.base64ToArrayBuffer(encryptedKeyBase64);
+
+    // nonce(12) + ciphertext + tag(16) フォーマット
+    const nonce = new Uint8Array(encryptedData.slice(0, 12));
+    const ciphertextWithTag = new Uint8Array(encryptedData.slice(12));
+    const ciphertextLength = ciphertextWithTag.length - 16;
+    const ciphertext = ciphertextWithTag.slice(0, ciphertextLength);
+    const tag = ciphertextWithTag.slice(ciphertextLength);
+
+    // セッション鍵でAES-GCM鍵をインポート
+    const key = await crypto.subtle.importKey(
+      'raw',
+      this.sessionKey,
+      { name: 'AES-GCM' },
+      false,
+      ['decrypt']
+    );
+
+    // ciphertextとtagを結合して復号化
+    const ciphertextFull = new Uint8Array(ciphertext.length + tag.length);
+    ciphertextFull.set(ciphertext, 0);
+    ciphertextFull.set(tag, ciphertext.length);
+
+    const channelKey = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: nonce },
+      key,
+      ciphertextFull
+    );
+
+    this.channelKeys.set(channelId, new Uint8Array(channelKey));
+    console.log(`Channel key set for ${channelId}`);
+  }
+
+  /// <summary>
+  /// 平文のチャンネル鍵を設定（E2EE無効時）
+  /// </summary>
+  setPlainChannelKey(channelId: string, plainKeyBase64: string): void {
+    const channelKey = this.base64ToArrayBuffer(plainKeyBase64);
+    this.channelKeys.set(channelId, new Uint8Array(channelKey));
+    console.warn(`Plain channel key set for ${channelId} (E2EE disabled)`);
+  }
+
+  /// <summary>
+  /// チャンネル鍵を使用して暗号化
+  /// </summary>
+  async encrypt(plaintext: string, channelId?: string): Promise<string> {
+    const keyToUse = channelId && this.channelKeys.has(channelId)
+      ? this.channelKeys.get(channelId)!
+      : this.sessionKey;
+
+    if (!keyToUse) {
+      throw new Error('No key available for encryption');
     }
 
     const encoder = new TextEncoder();
@@ -77,7 +135,7 @@ export class E2eeProvider {
     // AES-GCM鍵をインポート
     const key = await crypto.subtle.importKey(
       'raw',
-      this.sessionKey,
+      keyToUse,
       { name: 'AES-GCM' },
       false,
       ['encrypt']
@@ -90,7 +148,7 @@ export class E2eeProvider {
       plaintextBytes
     );
 
-    // nonce + ciphertext
+    // nonce + ciphertext (ciphertextにはtagが含まれる)
     const result = new Uint8Array(nonce.length + ciphertext.byteLength);
     result.set(nonce, 0);
     result.set(new Uint8Array(ciphertext), nonce.length);
@@ -98,9 +156,16 @@ export class E2eeProvider {
     return this.arrayBufferToBase64(result);
   }
 
-  async decrypt(ciphertextBase64: string): Promise<string> {
-    if (!this.sessionKey) {
-      throw new Error('Session key not established');
+  /// <summary>
+  /// チャンネル鍵を使用して復号化
+  /// </summary>
+  async decrypt(ciphertextBase64: string, channelId?: string): Promise<string> {
+    const keyToUse = channelId && this.channelKeys.has(channelId)
+      ? this.channelKeys.get(channelId)!
+      : this.sessionKey;
+
+    if (!keyToUse) {
+      throw new Error('No key available for decryption');
     }
 
     const data = this.base64ToArrayBuffer(ciphertextBase64);
@@ -116,7 +181,7 @@ export class E2eeProvider {
     // AES-GCM鍵をインポート
     const key = await crypto.subtle.importKey(
       'raw',
-      this.sessionKey,
+      keyToUse,
       { name: 'AES-GCM' },
       false,
       ['decrypt']
@@ -133,10 +198,15 @@ export class E2eeProvider {
     return decoder.decode(plaintext);
   }
 
+  hasChannelKey(channelId: string): boolean {
+    return this.channelKeys.has(channelId);
+  }
+
   reset(): void {
     this.privateKey = null;
     this.sessionKey = null;
     this.sessionId = null;
+    this.channelKeys.clear();
   }
 
   private arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array): string {

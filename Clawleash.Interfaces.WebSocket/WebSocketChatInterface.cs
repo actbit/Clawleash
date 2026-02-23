@@ -1,15 +1,14 @@
-using System.Buffers;
-using System.Net.WebSockets;
 using System.Text;
-using System.Text.Json;
+using Clawleash.Abstractions.Security;
 using Clawleash.Abstractions.Services;
-using Clawleash.Interfaces.WebSocket.Security;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 
 namespace Clawleash.Interfaces.WebSocket;
 
 /// <summary>
 /// WebSocketチャットインターフェース（E2EE対応）
+/// SignalRクライアントを使用してサーバーと通信
 /// </summary>
 public class WebSocketChatInterface : IChatInterface
 {
@@ -17,13 +16,13 @@ public class WebSocketChatInterface : IChatInterface
     private readonly ILogger<WebSocketChatInterface>? _logger;
     private readonly AesGcmE2eeProvider _e2eeProvider;
     private readonly Dictionary<string, string> _channelTracking = new();
-    private ClientWebSocket? _client;
+    private HubConnection? _hubConnection;
     private CancellationTokenSource? _cts;
     private bool _disposed;
     private bool _isConnected;
 
     public string Name => "WebSocket";
-    public bool IsConnected => _isConnected && (_client?.State == WebSocketState.Open);
+    public bool IsConnected => _isConnected && _hubConnection?.State == HubConnectionState.Connected;
 
     public event EventHandler<ChatMessageReceivedEventArgs>? MessageReceived;
 
@@ -45,14 +44,63 @@ public class WebSocketChatInterface : IChatInterface
         }
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _client = new ClientWebSocket();
 
         try
         {
-            var uri = new Uri(_settings.ServerUrl);
-            _logger?.LogInformation("Connecting to WebSocket server: {Url}", _settings.ServerUrl);
+            // SignalRハブ接続を構築
+            _hubConnection = new HubConnectionBuilder()
+                .WithUrl(_settings.ServerUrl)
+                .WithAutomaticReconnect(new RetryPolicy(_settings.ReconnectIntervalMs, _settings.MaxReconnectAttempts))
+                .Build();
 
-            await _client.ConnectAsync(uri, _cts.Token);
+            // メッセージ受信ハンドラー
+            _hubConnection.On<object>("MessageReceived", async (message) =>
+            {
+                await HandleMessageReceivedAsync(message);
+            });
+
+            // キー交換完了ハンドラー
+            _hubConnection.On<object>("KeyExchangeCompleted", (result) =>
+            {
+                _logger?.LogInformation("Key exchange confirmed by server");
+            });
+
+            // チャンネル鍵受信ハンドラー
+            _hubConnection.On<object>("ChannelKey", async (data) =>
+            {
+                await HandleChannelKeyAsync(data);
+            });
+
+            // 接続状態変更ハンドラー
+            _hubConnection.Reconnecting += (exception) =>
+            {
+                _isConnected = false;
+                _logger?.LogWarning(exception, "Reconnecting to SignalR hub...");
+                return Task.CompletedTask;
+            };
+
+            _hubConnection.Reconnected += async (connectionId) =>
+            {
+                _logger?.LogInformation("Reconnected to SignalR hub. ConnectionId: {ConnectionId}", connectionId);
+                _isConnected = true;
+
+                // E2EE有効時は鍵交換を再実行
+                if (_settings.EnableE2ee)
+                {
+                    await PerformKeyExchangeAsync(_cts.Token);
+                }
+            };
+
+            _hubConnection.Closed += (exception) =>
+            {
+                _isConnected = false;
+                _logger?.LogWarning(exception, "Connection to SignalR hub closed");
+                return Task.CompletedTask;
+            };
+
+            _logger?.LogInformation("Connecting to SignalR hub: {Url}", _settings.ServerUrl);
+
+            await _hubConnection.StartAsync(_cts.Token);
             _isConnected = true;
 
             // E2EE有効時は鍵交換を実行
@@ -62,42 +110,41 @@ public class WebSocketChatInterface : IChatInterface
             }
 
             _logger?.LogInformation("WebSocket connected. E2EE: {E2ee}", _settings.EnableE2ee ? "Enabled" : "Disabled");
-
-            // メッセージ受信ループ開始
-            _ = ReceiveLoopAsync(_cts.Token);
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Failed to connect to WebSocket server");
+            _logger?.LogError(ex, "Failed to connect to SignalR hub");
             _isConnected = false;
-
-            // 再接続試行
-            if (_settings.MaxReconnectAttempts > 0)
-            {
-                _ = ReconnectAsync(_cts.Token);
-            }
+            throw;
         }
     }
 
     private async Task PerformKeyExchangeAsync(CancellationToken ct)
     {
+        if (_hubConnection == null) return;
+
         try
         {
-            // 鍵交換開始
-            var keyExchangeResult = await _e2eeProvider.StartKeyExchangeAsync(ct);
+            // サーバーのStartKeyExchangeメソッドを呼び出し
+            var response = await _hubConnection.InvokeAsync<KeyExchangeResponse>(
+                "StartKeyExchange", ct);
 
-            // 公開鍵をサーバーに送信
-            var keyExchangeMessage = new
+            // サーバーの公開鍵で鍵交換を完了
+            var serverPublicKey = Convert.FromBase64String(response.ServerPublicKey);
+            await _e2eeProvider.CompleteKeyExchangeAsync(new KeyExchangeResult
             {
-                type = "key_exchange",
-                sessionId = keyExchangeResult.SessionId,
-                publicKey = Convert.ToBase64String(keyExchangeResult.PublicKey)
-            };
+                PublicKey = serverPublicKey,
+                SessionId = response.SessionId
+            }, ct);
 
-            await SendRawMessageAsync(JsonSerializer.Serialize(keyExchangeMessage), ct);
+            // クライアントの公開鍵をサーバーに送信
+            var clientPublicKey = _e2eeProvider.GetPublicKey();
+            await _hubConnection.InvokeAsync("CompleteKeyExchange",
+                response.SessionId,
+                Convert.ToBase64String(clientPublicKey),
+                ct);
 
-            // サーバーからの応答を待機（ReceiveLoopで処理）
-            _logger?.LogInformation("Key exchange initiated. SessionId: {SessionId}", keyExchangeResult.SessionId);
+            _logger?.LogInformation("Key exchange completed. SessionId: {SessionId}", response.SessionId);
         }
         catch (Exception ex)
         {
@@ -105,144 +152,119 @@ public class WebSocketChatInterface : IChatInterface
         }
     }
 
-    private async Task ReceiveLoopAsync(CancellationToken ct)
-    {
-        var buffer = ArrayPool<byte>.Shared.Rent(8192);
-
-        try
-        {
-            while (!ct.IsCancellationRequested && _client?.State == WebSocketState.Open)
-            {
-                var result = await _client.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
-
-                if (result.MessageType == WebSocketMessageType.Close)
-                {
-                    _logger?.LogInformation("WebSocket close received");
-                    break;
-                }
-
-                if (result.MessageType == WebSocketMessageType.Text)
-                {
-                    var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    await ProcessMessageAsync(json, ct);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // 正常終了
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Error in receive loop");
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-            _isConnected = false;
-        }
-    }
-
-    private async Task ProcessMessageAsync(string json, CancellationToken ct)
+    private Task HandleChannelKeyAsync(object data)
     {
         try
         {
-            using var doc = JsonDocument.Parse(json);
+            var json = System.Text.Json.JsonSerializer.Serialize(data);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;
-            var type = root.GetProperty("type").GetString();
 
-            switch (type)
+            var channelId = root.TryGetProperty("channelId", out var chEl)
+                ? chEl.GetString() ?? ""
+                : "";
+
+            if (string.IsNullOrEmpty(channelId)) return Task.CompletedTask;
+
+            if (root.TryGetProperty("encryptedKey", out var encKeyEl) &&
+                !string.IsNullOrEmpty(encKeyEl.GetString()))
             {
-                case "key_exchange_response":
-                    await HandleKeyExchangeResponseAsync(root, ct);
-                    break;
-
-                case "message":
-                    await HandleChatMessageAsync(root, ct);
-                    break;
-
-                case "ping":
-                    await SendPongAsync(ct);
-                    break;
+                // E2EE有効: 暗号化されたチャンネル鍵を復号化
+                var encryptedKey = Convert.FromBase64String(encKeyEl.GetString()!);
+                _e2eeProvider.SetChannelKey(channelId, encryptedKey);
+                _logger?.LogInformation("Channel key set for {ChannelId}", channelId);
+            }
+            else if (root.TryGetProperty("plainKey", out var plainKeyEl) &&
+                     !string.IsNullOrEmpty(plainKeyEl.GetString()))
+            {
+                // E2EE無効: 平文のチャンネル鍵を設定
+                var plainKey = Convert.FromBase64String(plainKeyEl.GetString()!);
+                _e2eeProvider.SetPlainChannelKey(channelId, plainKey);
+                _logger?.LogWarning("Plain channel key set for {ChannelId} (E2EE disabled)", channelId);
             }
         }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Failed to process message: {Json}", json);
+            _logger?.LogWarning(ex, "Failed to set channel key");
         }
+
+        return Task.CompletedTask;
     }
 
-    private async Task HandleKeyExchangeResponseAsync(JsonElement root, CancellationToken ct)
+    private async Task HandleMessageReceivedAsync(object messageObj)
     {
         try
         {
-            var sessionId = root.GetProperty("sessionId").GetString();
-            var publicKeyBase64 = root.GetProperty("publicKey").GetString();
+            // 動的にメッセージを解析
+            var json = System.Text.Json.JsonSerializer.Serialize(messageObj);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
 
-            if (!string.IsNullOrEmpty(publicKeyBase64))
+            var content = root.TryGetProperty("content", out var contentEl)
+                ? contentEl.GetString() ?? ""
+                : "";
+
+            var messageId = root.TryGetProperty("messageId", out var msgIdEl)
+                ? msgIdEl.GetString() ?? Guid.NewGuid().ToString()
+                : Guid.NewGuid().ToString();
+
+            var senderId = root.TryGetProperty("senderId", out var senderEl)
+                ? senderEl.GetString() ?? "unknown"
+                : "unknown";
+
+            var senderName = root.TryGetProperty("senderName", out var nameEl)
+                ? nameEl.GetString() ?? senderId
+                : senderId;
+
+            var channelId = root.TryGetProperty("channelId", out var chEl)
+                ? chEl.GetString() ?? "default"
+                : "default";
+
+            var encrypted = root.TryGetProperty("encrypted", out var encEl)
+                && encEl.GetBoolean();
+
+            var ciphertextBase64 = root.TryGetProperty("ciphertext", out var cipherEl)
+                ? cipherEl.GetString()
+                : null;
+
+            // E2EE有効時は復号化
+            if (encrypted && _settings.EnableE2ee && _e2eeProvider.IsEncrypted && !string.IsNullOrEmpty(ciphertextBase64))
             {
-                var peerPublicKey = Convert.FromBase64String(publicKeyBase64);
-                await _e2eeProvider.CompleteKeyExchangeAsync(new Abstractions.Security.KeyExchangeResult
-                {
-                    SessionId = sessionId ?? "",
-                    PublicKey = peerPublicKey
-                }, ct);
-
-                _logger?.LogInformation("Key exchange completed. E2EE active.");
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to complete key exchange");
-        }
-    }
-
-    private async Task HandleChatMessageAsync(JsonElement root, CancellationToken ct)
-    {
-        var content = root.GetProperty("content").GetString() ?? "";
-        var messageId = root.TryGetProperty("messageId", out var msgIdEl) ? msgIdEl.GetString() ?? "" : Guid.NewGuid().ToString();
-        var senderId = root.TryGetProperty("senderId", out var senderEl) ? senderEl.GetString() ?? "" : "unknown";
-        var senderName = root.TryGetProperty("senderName", out var nameEl) ? nameEl.GetString() ?? "" : senderId;
-        var channelId = root.TryGetProperty("channelId", out var chEl) ? chEl.GetString() ?? "" : "default";
-
-        // E2EE有効時は復号化
-        if (_settings.EnableE2ee && _e2eeProvider.IsEncrypted)
-        {
-            if (root.TryGetProperty("encrypted", out var encryptedEl) && encryptedEl.GetBoolean())
-            {
-                var ciphertextBase64 = root.GetProperty("ciphertext").GetString();
-                if (!string.IsNullOrEmpty(ciphertextBase64))
+                try
                 {
                     var ciphertext = Convert.FromBase64String(ciphertextBase64);
-                    content = await _e2eeProvider.DecryptAsync(ciphertext, ct);
+                    // チャンネル鍵があれば使用、なければセッション鍵を使用
+                    content = await _e2eeProvider.DecryptAsync(ciphertext, channelId);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to decrypt message");
+                    content = "[Encrypted - Decryption Failed]";
                 }
             }
-        }
 
-        var args = new ChatMessageReceivedEventArgs
-        {
-            MessageId = messageId,
-            SenderId = senderId,
-            SenderName = senderName,
-            Content = content,
-            ChannelId = channelId,
-            Timestamp = DateTime.UtcNow,
-            InterfaceName = Name,
-            Metadata = new Dictionary<string, object>
+            var args = new ChatMessageReceivedEventArgs
             {
-                ["encrypted"] = _settings.EnableE2ee && _e2eeProvider.IsEncrypted
-            }
-        };
+                MessageId = messageId,
+                SenderId = senderId,
+                SenderName = senderName,
+                Content = content,
+                ChannelId = channelId,
+                Timestamp = DateTime.UtcNow,
+                InterfaceName = Name,
+                Metadata = new Dictionary<string, object>
+                {
+                    ["encrypted"] = encrypted && _e2eeProvider.IsEncrypted
+                }
+            };
 
-        _channelTracking[messageId] = channelId;
-
-        MessageReceived?.Invoke(this, args);
-    }
-
-    private async Task SendPongAsync(CancellationToken ct)
-    {
-        var pong = JsonSerializer.Serialize(new { type = "pong" });
-        await SendRawMessageAsync(pong, ct);
+            _channelTracking[messageId] = channelId;
+            MessageReceived?.Invoke(this, args);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to process received message");
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
@@ -251,9 +273,9 @@ public class WebSocketChatInterface : IChatInterface
         {
             _cts?.Cancel();
 
-            if (_client?.State == WebSocketState.Open)
+            if (_hubConnection != null)
             {
-                await _client.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                await _hubConnection.StopAsync(cancellationToken);
             }
 
             _isConnected = false;
@@ -268,7 +290,7 @@ public class WebSocketChatInterface : IChatInterface
     public async Task SendMessageAsync(string message, string? replyToMessageId = null,
         CancellationToken cancellationToken = default)
     {
-        if (!IsConnected)
+        if (!IsConnected || _hubConnection == null)
         {
             _logger?.LogWarning("WebSocket is not connected");
             return;
@@ -280,76 +302,73 @@ public class WebSocketChatInterface : IChatInterface
             channelId = trackedChannel;
         }
 
-        var payload = new Dictionary<string, object>
-        {
-            ["type"] = "message",
-            ["content"] = message,
-            ["messageId"] = Guid.NewGuid().ToString(),
-            ["channelId"] = channelId ?? "default"
-        };
+        var effectiveChannelId = channelId ?? "default";
 
-        // E2EE有効時は暗号化
-        if (_settings.EnableE2ee && _e2eeProvider.IsEncrypted)
+        try
         {
-            var ciphertext = await _e2eeProvider.EncryptAsync(message, cancellationToken);
-            payload["content"] = "";
-            payload["encrypted"] = true;
-            payload["ciphertext"] = Convert.ToBase64String(ciphertext);
+            // チャンネル鍵がある場合はチャンネル鍵で暗号化
+            var canEncrypt = _settings.EnableE2ee && _e2eeProvider.IsEncrypted &&
+                              _e2eeProvider.HasChannelKey(effectiveChannelId);
+
+            if (canEncrypt)
+            {
+                // チャンネル鍵で暗号化
+                var ciphertext = await _e2eeProvider.EncryptAsync(message, effectiveChannelId, cancellationToken);
+                await _hubConnection.InvokeAsync("SendMessage", new
+                {
+                    content = "",
+                    channelId = effectiveChannelId,
+                    senderName = "Clawleash",
+                    encrypted = true,
+                    ciphertext = Convert.ToBase64String(ciphertext)
+                }, cancellationToken);
+            }
+            else
+            {
+                // 平文で送信
+                await _hubConnection.InvokeAsync("SendMessage", new
+                {
+                    content = message,
+                    channelId = effectiveChannelId,
+                    senderName = "Clawleash",
+                    encrypted = false,
+                    ciphertext = (string?)null
+                }, cancellationToken);
+            }
         }
-
-        var json = JsonSerializer.Serialize(payload);
-        await SendRawMessageAsync(json, cancellationToken);
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to send message");
+        }
     }
 
-    private async Task SendRawMessageAsync(string message, CancellationToken ct)
+    /// <summary>
+    /// チャンネルに参加
+    /// </summary>
+    public async Task JoinChannelAsync(string channelId, CancellationToken cancellationToken = default)
     {
-        if (_client?.State != WebSocketState.Open)
+        if (_hubConnection == null || !IsConnected)
+        {
+            _logger?.LogWarning("WebSocket is not connected");
             return;
-
-        var bytes = Encoding.UTF8.GetBytes(message);
-        await _client.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
-    }
-
-    private async Task ReconnectAsync(CancellationToken ct)
-    {
-        var attempts = 0;
-        while (attempts < _settings.MaxReconnectAttempts && !ct.IsCancellationRequested)
-        {
-            attempts++;
-            _logger?.LogInformation("Reconnection attempt {Attempt}/{Max}",
-                attempts, _settings.MaxReconnectAttempts);
-
-            await Task.Delay(_settings.ReconnectIntervalMs, ct);
-
-            try
-            {
-                if (_client != null)
-                {
-                    _client.Dispose();
-                }
-                _client = new ClientWebSocket();
-
-                var uri = new Uri(_settings.ServerUrl);
-                await _client.ConnectAsync(uri, ct);
-                _isConnected = true;
-
-                if (_settings.EnableE2ee)
-                {
-                    _e2eeProvider.Reset();
-                    await PerformKeyExchangeAsync(ct);
-                }
-
-                _ = ReceiveLoopAsync(ct);
-                _logger?.LogInformation("Reconnected successfully");
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "Reconnection attempt {Attempt} failed", attempts);
-            }
         }
 
-        _logger?.LogError("Max reconnection attempts reached");
+        await _hubConnection.InvokeAsync("JoinChannel", channelId, cancellationToken);
+        _logger?.LogDebug("Joined channel: {ChannelId}", channelId);
+    }
+
+    /// <summary>
+    /// チャンネルから離脱
+    /// </summary>
+    public async Task LeaveChannelAsync(string channelId, CancellationToken cancellationToken = default)
+    {
+        if (_hubConnection == null || !IsConnected)
+        {
+            return;
+        }
+
+        await _hubConnection.InvokeAsync("LeaveChannel", channelId, cancellationToken);
+        _logger?.LogDebug("Left channel: {ChannelId}", channelId);
     }
 
     public IStreamingMessageWriter StartStreamingMessage(CancellationToken cancellationToken = default)
@@ -364,9 +383,45 @@ public class WebSocketChatInterface : IChatInterface
 
         _disposed = true;
         await StopAsync();
-        _client?.Dispose();
+        _hubConnection?.DisposeAsync();
         _cts?.Dispose();
     }
+
+    /// <summary>
+    /// SignalR再接続ポリシー
+    /// </summary>
+    private class RetryPolicy : IRetryPolicy
+    {
+        private readonly int _reconnectIntervalMs;
+        private readonly int _maxReconnectAttempts;
+
+        public RetryPolicy(int reconnectIntervalMs, int maxReconnectAttempts)
+        {
+            _reconnectIntervalMs = reconnectIntervalMs;
+            _maxReconnectAttempts = maxReconnectAttempts;
+        }
+
+        public TimeSpan? NextRetryDelay(RetryContext retryContext)
+        {
+            if (retryContext.PreviousRetryCount >= _maxReconnectAttempts)
+            {
+                return null; // 再接続試行回数上限に達した
+            }
+
+            // 指数バックオフ
+            var delay = Math.Min(_reconnectIntervalMs * Math.Pow(2, retryContext.PreviousRetryCount), 60000);
+            return TimeSpan.FromMilliseconds(delay);
+        }
+    }
+}
+
+/// <summary>
+/// キー交換レスポンス
+/// </summary>
+internal class KeyExchangeResponse
+{
+    public string SessionId { get; set; } = string.Empty;
+    public string ServerPublicKey { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -376,7 +431,6 @@ internal class WebSocketStreamingWriter : IStreamingMessageWriter
 {
     private readonly StringBuilder _content = new();
     private readonly WebSocketChatInterface _interface;
-    private bool _disposed;
 
     public string MessageId { get; } = Guid.NewGuid().ToString();
 
@@ -402,7 +456,6 @@ internal class WebSocketStreamingWriter : IStreamingMessageWriter
 
     public ValueTask DisposeAsync()
     {
-        _disposed = true;
         return ValueTask.CompletedTask;
     }
 }

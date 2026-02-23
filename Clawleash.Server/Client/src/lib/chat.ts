@@ -21,10 +21,12 @@ export class ChatService {
   private connection: signalR.HubConnection | null = null;
   private e2ee: E2eeProvider;
   private enableE2ee: boolean;
+  private currentChannel: string | null = null;
 
   public onMessageReceived?: (message: Message) => void;
   public onConnectionStateChanged?: (state: ConnectionState) => void;
   public onKeyExchangeCompleted?: () => void;
+  public onChannelJoined?: (channelId: string) => void;
 
   constructor(enableE2ee: boolean = true) {
     this.e2ee = new E2eeProvider();
@@ -53,10 +55,10 @@ export class ChatService {
     this.connection.on('MessageReceived', async (message: any) => {
       let content = message.content;
 
-      // E2EE復号化
-      if (message.encrypted && this.e2ee.isEncrypted && message.ciphertext) {
+      // E2EE復号化（チャンネル鍵を使用）
+      if (message.encrypted && message.ciphertext) {
         try {
-          content = await this.e2ee.decrypt(message.ciphertext);
+          content = await this.e2ee.decrypt(message.ciphertext, message.channelId);
         } catch (e) {
           console.error('Failed to decrypt message:', e);
           content = '[Encrypted - Decryption Failed]';
@@ -72,6 +74,23 @@ export class ChatService {
 
     this.connection.on('KeyExchangeCompleted', () => {
       this.onKeyExchangeCompleted?.();
+    });
+
+    this.connection.on('ChannelKey', async (data: any) => {
+      try {
+        if (data.encryptedKey) {
+          // E2EE有効: 暗号化されたチャンネル鍵を復号化
+          await this.e2ee.setChannelKey(data.channelId, data.encryptedKey);
+        } else if (data.plainKey) {
+          // E2EE無効: 平文のチャンネル鍵を設定
+          this.e2ee.setPlainChannelKey(data.channelId, data.plainKey);
+        }
+
+        console.log(`Channel key received for ${data.channelId}`);
+        this.onChannelJoined?.(data.channelId);
+      } catch (e) {
+        console.error('Failed to set channel key:', e);
+      }
     });
 
     this.connection.on('Pong', (timestamp: Date) => {
@@ -92,6 +111,11 @@ export class ChatService {
       // E2EE鍵交換を再実行
       if (this.enableE2ee) {
         await this.performKeyExchange();
+      }
+
+      // 現在のチャンネルに再参加
+      if (this.currentChannel) {
+        await this.joinChannel(this.currentChannel);
       }
     });
 
@@ -126,19 +150,29 @@ export class ChatService {
 
   async joinChannel(channelId: string): Promise<void> {
     if (!this.connection) throw new Error('Not connected');
+
+    this.currentChannel = channelId;
     await this.connection.invoke('JoinChannel', channelId);
   }
 
   async leaveChannel(channelId: string): Promise<void> {
     if (!this.connection) throw new Error('Not connected');
+
+    if (this.currentChannel === channelId) {
+      this.currentChannel = null;
+    }
+
     await this.connection.invoke('LeaveChannel', channelId);
   }
 
   async sendMessage(content: string, channelId: string, senderName: string = 'Anonymous'): Promise<void> {
     if (!this.connection) throw new Error('Not connected');
 
-    if (this.enableE2ee && this.e2ee.isEncrypted) {
-      const ciphertext = await this.e2ee.encrypt(content);
+    const canEncrypt = this.enableE2ee && this.e2ee.hasChannelKey(channelId);
+
+    if (canEncrypt) {
+      // チャンネル鍵で暗号化
+      const ciphertext = await this.e2ee.encrypt(content, channelId);
       await this.connection.invoke('SendMessage', {
         content: '',
         channelId,
@@ -147,6 +181,7 @@ export class ChatService {
         ciphertext
       });
     } else {
+      // 平文で送信
       await this.connection.invoke('SendMessage', {
         content,
         channelId,
@@ -162,6 +197,7 @@ export class ChatService {
       this.connection = null;
     }
     this.e2ee.reset();
+    this.currentChannel = null;
     this.notifyState('disconnected');
   }
 
