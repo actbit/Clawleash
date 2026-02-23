@@ -1,4 +1,11 @@
 <Solution>
   <Project Path="Clawleash.Shell/Clawleash.Shell.csproj" />
   <Project Path="Clawleash/Clawleash.csproj" />
+  <Project Path="Clawleash.Abstractions/Clawleash.Abstractions.csproj" />
+  <Project Path="Clawleash.Server/Clawleash.Server.csproj" />
+  <Project Path="Clawleash.Interfaces.Discord/Clawleash.Interfaces.Discord.csproj" />
+  <Project Path="Clawleash.Interfaces.Slack/Clawleash.Interfaces.Slack.csproj" />
+  <Project Path="Clawleash.Interfaces.WebSocket/Clawleash.Interfaces.WebSocket.csproj" />
+  <Project Path="Clawleash.Interfaces.WebRTC/Clawleash.Interfaces.WebRTC.csproj" />
+  <Project Path="Clawleash.Tests/Clawleash.Tests.csproj" />
 </Solution>

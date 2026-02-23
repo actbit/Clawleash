@@ -1,4 +1,5 @@
 using System.Text;
+using Clawleash.Abstractions.Services;
 
 namespace Clawleash.Services;
 
@@ -11,6 +12,7 @@ public class CliChatInterface : IChatInterface
     private readonly StringBuilder _currentMessage = new();
     private bool _disposed;
     private bool _isStreaming;
+    private CancellationTokenSource? _cts;
 
     public string Name => "CLI";
     public bool IsConnected { get; private set; }
@@ -19,13 +21,21 @@ public class CliChatInterface : IChatInterface
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         IsConnected = true;
         Console.OutputEncoding = Encoding.UTF8;
         Console.InputEncoding = Encoding.UTF8;
 
         // バックグラウンドで入力を監視
-        _ = Task.Run(() => MonitorInputAsync(cancellationToken), cancellationToken);
+        _ = Task.Run(() => MonitorInputAsync(_cts.Token), _cts.Token);
 
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        IsConnected = false;
+        _cts?.Cancel();
         return Task.CompletedTask;
     }
 
@@ -61,7 +71,8 @@ public class CliChatInterface : IChatInterface
                     SenderName = "User",
                     Content = line,
                     ChannelId = "cli-channel",
-                    Timestamp = DateTime.UtcNow
+                    Timestamp = DateTime.UtcNow,
+                    InterfaceName = Name
                 };
 
                 MessageReceived?.Invoke(this, args);
@@ -114,6 +125,8 @@ public class CliChatInterface : IChatInterface
         }
 
         IsConnected = false;
+        _cts?.Cancel();
+        _cts?.Dispose();
         _disposed = true;
         return ValueTask.CompletedTask;
     }
