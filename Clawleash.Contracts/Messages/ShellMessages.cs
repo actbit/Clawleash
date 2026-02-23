@@ -1,6 +1,6 @@
 using MessagePack;
 
-namespace Clawleash.Execution;
+namespace Clawleash.Contracts;
 
 /// <summary>
 /// IPCメッセージのベース
@@ -27,7 +27,61 @@ public abstract class ShellMessage
 }
 
 /// <summary>
-/// コマンド実行リクエスト
+/// シェル準備完了メッセージ（Shell→Main）
+/// </summary>
+[MessagePackObject]
+public class ShellReadyMessage : ShellMessage
+{
+    [Key(10)]
+    public int ProcessId { get; set; }
+
+    [Key(11)]
+    public string Runtime { get; set; } = string.Empty;
+
+    [Key(12)]
+    public string OS { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// 初期化リクエスト（Main→Shell）
+/// </summary>
+[MessagePackObject]
+public class ShellInitializeRequest : ShellMessage
+{
+    [Key(10)]
+    public string[] AllowedCommands { get; set; } = Array.Empty<string>();
+
+    [Key(11)]
+    public string[] AllowedPaths { get; set; } = Array.Empty<string>();
+
+    [Key(12)]
+    public string[] ReadOnlyPaths { get; set; } = Array.Empty<string>();
+
+    [Key(13)]
+    public ShellLanguageMode LanguageMode { get; set; } = ShellLanguageMode.ConstrainedLanguage;
+}
+
+/// <summary>
+/// 初期化レスポンス（Shell→Main）
+/// </summary>
+[MessagePackObject]
+public class ShellInitializeResponse : ShellMessage
+{
+    [Key(10)]
+    public bool Success { get; set; }
+
+    [Key(11)]
+    public string? Error { get; set; }
+
+    [Key(12)]
+    public string Version { get; set; } = "1.0.0";
+
+    [Key(13)]
+    public string Runtime { get; set; } = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
+}
+
+/// <summary>
+/// コマンド実行リクエスト（Main→Shell）
 /// </summary>
 [MessagePackObject]
 public class ShellExecuteRequest : ShellMessage
@@ -49,7 +103,7 @@ public class ShellExecuteRequest : ShellMessage
 }
 
 /// <summary>
-/// コマンド実行レスポンス
+/// コマンド実行レスポンス（Shell→Main）
 /// </summary>
 [MessagePackObject]
 public class ShellExecuteResponse : ShellMessage
@@ -74,61 +128,38 @@ public class ShellExecuteResponse : ShellMessage
 }
 
 /// <summary>
-/// 初期化リクエスト
+/// Tool 呼び出しリクエスト（Main→Shell）
 /// </summary>
 [MessagePackObject]
-public class ShellInitializeRequest : ShellMessage
+public class ToolInvokeRequest : ShellMessage
 {
     [Key(10)]
-    public string[] AllowedCommands { get; set; } = Array.Empty<string>();
+    public string ToolName { get; set; } = string.Empty;
 
     [Key(11)]
-    public string[] AllowedPaths { get; set; } = Array.Empty<string>();
+    public string MethodName { get; set; } = string.Empty;
 
     [Key(12)]
-    public string[] ReadOnlyPaths { get; set; } = Array.Empty<string>();
-
-    [Key(13)]
-    public ShellLanguageMode LanguageMode { get; set; } = ShellLanguageMode.ConstrainedLanguage;
+    public object?[] Arguments { get; set; } = Array.Empty<object?>();
 }
 
 /// <summary>
-/// 初期化レスポンス
+/// Tool 呼び出しレスポンス（Shell→Main）
 /// </summary>
 [MessagePackObject]
-public class ShellInitializeResponse : ShellMessage
+public class ToolInvokeResponse : ShellMessage
 {
     [Key(10)]
-    public bool Success { get; set; }
+    public string RequestId { get; set; } = string.Empty;
 
     [Key(11)]
+    public bool Success { get; set; }
+
+    [Key(12)]
+    public object? Result { get; set; }
+
+    [Key(13)]
     public string? Error { get; set; }
-
-    [Key(12)]
-    public string Version { get; set; } = "1.0.0";
-
-    [Key(13)]
-    public string Runtime { get; set; } = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
-}
-
-/// <summary>
-/// シャットダウンリクエスト
-/// </summary>
-[MessagePackObject]
-public class ShellShutdownRequest : ShellMessage
-{
-    [Key(10)]
-    public bool Force { get; set; }
-}
-
-/// <summary>
-/// シャットダウンレスポンス
-/// </summary>
-[MessagePackObject]
-public class ShellShutdownResponse : ShellMessage
-{
-    [Key(10)]
-    public bool Success { get; set; }
 }
 
 /// <summary>
@@ -155,73 +186,21 @@ public class ShellPingResponse : ShellMessage
 }
 
 /// <summary>
-/// Tool 呼び出しリクエスト
+/// シャットダウンリクエスト（Main→Shell）
 /// </summary>
 [MessagePackObject]
-public class ToolInvokeRequest : ShellMessage
+public class ShellShutdownRequest : ShellMessage
 {
     [Key(10)]
-    public string ToolName { get; set; } = string.Empty;
-
-    [Key(11)]
-    public string MethodName { get; set; } = string.Empty;
-
-    [Key(12)]
-    public object?[] Arguments { get; set; } = Array.Empty<object?>();
+    public bool Force { get; set; }
 }
 
 /// <summary>
-/// Tool 呼び出しレスポンス
+/// シャットダウンレスポンス（Shell→Main）
 /// </summary>
 [MessagePackObject]
-public class ToolInvokeResponse : ShellMessage
+public class ShellShutdownResponse : ShellMessage
 {
     [Key(10)]
-    public string RequestId { get; set; } = string.Empty;
-
-    [Key(11)]
     public bool Success { get; set; }
-
-    [Key(12)]
-    public object? Result { get; set; }
-
-    [Key(13)]
-    public string? Error { get; set; }
-}
-
-/// <summary>
-/// シェル準備完了メッセージ
-/// </summary>
-[MessagePackObject]
-public class ShellReadyMessage : ShellMessage
-{
-    [Key(10)]
-    public int ProcessId { get; set; }
-
-    [Key(11)]
-    public string Runtime { get; set; } = string.Empty;
-
-    [Key(12)]
-    public string OS { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// 実行モード
-/// </summary>
-public enum ShellExecutionMode
-{
-    Constrained,
-    Full,
-    NoLanguage
-}
-
-/// <summary>
-/// シェル言語モード
-/// </summary>
-public enum ShellLanguageMode
-{
-    FullLanguage,
-    ConstrainedLanguage,
-    RestrictedLanguage,
-    NoLanguage
 }

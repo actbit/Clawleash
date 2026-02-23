@@ -2,11 +2,7 @@ using System.Collections.ObjectModel;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Microsoft.Extensions.Logging;
-using ShellLanguageMode = Clawleash.Shell.IPC.ShellLanguageMode;
-using InitializeRequest = Clawleash.Shell.IPC.InitializeRequest;
-using InitializeResponse = Clawleash.Shell.IPC.InitializeResponse;
-using ExecuteRequest = Clawleash.Shell.IPC.ExecuteRequest;
-using ExecuteResponse = Clawleash.Shell.IPC.ExecuteResponse;
+using Clawleash.Contracts;
 
 namespace Clawleash.Shell.Hosting;
 
@@ -37,7 +33,7 @@ public class ConstrainedRunspaceHost : IDisposable
     /// <summary>
     /// 制約付きRunspaceを初期化
     /// </summary>
-    public async Task<InitializeResponse> InitializeAsync(InitializeRequest request)
+    public async Task<ShellInitializeResponse> InitializeAsync(ShellInitializeRequest request)
     {
         try
         {
@@ -72,7 +68,7 @@ public class ConstrainedRunspaceHost : IDisposable
             _initialized = true;
             _logger.LogInformation("Runspace初期化完了");
 
-            return new InitializeResponse
+            return new ShellInitializeResponse
             {
                 Success = true,
                 Version = typeof(ConstrainedRunspaceHost).Assembly.GetName().Version?.ToString() ?? "1.0.0"
@@ -81,7 +77,7 @@ public class ConstrainedRunspaceHost : IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Runspace初期化エラー");
-            return new InitializeResponse
+            return new ShellInitializeResponse
             {
                 Success = false,
                 Error = ex.Message
@@ -104,7 +100,7 @@ public class ConstrainedRunspaceHost : IDisposable
     /// <summary>
     /// 制約付きInitialSessionStateを作成
     /// </summary>
-    private InitialSessionState CreateConstrainedSessionState(InitializeRequest request)
+    private InitialSessionState CreateConstrainedSessionState(ShellInitializeRequest request)
     {
         InitialSessionState sessionState;
 
@@ -263,11 +259,11 @@ public class ConstrainedRunspaceHost : IDisposable
     /// <summary>
     /// コマンドを実行
     /// </summary>
-    public async Task<ExecuteResponse> ExecuteAsync(ExecuteRequest request)
+    public async Task<ShellExecuteResponse> ExecuteAsync(ShellExecuteRequest request)
     {
         if (!_initialized || _powerShell == null)
         {
-            return new ExecuteResponse
+            return new ShellExecuteResponse
             {
                 RequestId = request.MessageId,
                 Success = false,
@@ -284,7 +280,7 @@ public class ConstrainedRunspaceHost : IDisposable
             // パス検証（パラメータに含まれるパスをチェック）
             if (!ValidatePaths(request.Parameters))
             {
-                return new ExecuteResponse
+                return new ShellExecuteResponse
                 {
                     RequestId = request.MessageId,
                     Success = false,
@@ -301,7 +297,7 @@ public class ConstrainedRunspaceHost : IDisposable
             {
                 if (!_allowedPaths.Contains(request.WorkingDirectory))
                 {
-                    return new ExecuteResponse
+                    return new ShellExecuteResponse
                     {
                         RequestId = request.MessageId,
                         Success = false,
@@ -338,7 +334,7 @@ public class ConstrainedRunspaceHost : IDisposable
             var elapsed = DateTime.UtcNow - startTime;
             _logger.LogDebug("コマンド完了: {Success}, 所要時間: {Elapsed}ms", !hasErrors, elapsed.TotalMilliseconds);
 
-            return new ExecuteResponse
+            return new ShellExecuteResponse
             {
                 RequestId = request.MessageId,
                 Success = !hasErrors && _powerShell.HadErrors == false,
@@ -355,7 +351,7 @@ public class ConstrainedRunspaceHost : IDisposable
         catch (OperationCanceledException)
         {
             _logger.LogWarning("コマンドタイムアウト: {Command}", request.Command);
-            return new ExecuteResponse
+            return new ShellExecuteResponse
             {
                 RequestId = request.MessageId,
                 Success = false,
@@ -366,7 +362,7 @@ public class ConstrainedRunspaceHost : IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "コマンド実行エラー: {Command}", request.Command);
-            return new ExecuteResponse
+            return new ShellExecuteResponse
             {
                 RequestId = request.MessageId,
                 Success = false,

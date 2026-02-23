@@ -7,7 +7,7 @@ namespace Clawleash.Tools;
 
 /// <summary>
 /// ツールパッケージのロード・管理を行う
-/// ZIPファイルからDLLを展開し、プロキシを生成してKernelに登録
+/// 指定フォルダーのZIPファイルを自動スキャンしてロード
 /// </summary>
 public class ToolLoader : IDisposable
 {
@@ -16,24 +16,104 @@ public class ToolLoader : IDisposable
     private readonly IToolExecutor _executor;
     private readonly ToolProxyGenerator _proxyGenerator;
     private readonly string _toolsDirectory;
+    private readonly string _packagesDirectory;
     private readonly Dictionary<string, LoadedTool> _loadedTools = new();
     private readonly Dictionary<string, ToolPackage> _packages = new();
     private bool _disposed;
+    private FileSystemWatcher? _watcher;
 
     public IReadOnlyDictionary<string, LoadedTool> LoadedTools => _loadedTools;
+    public string PackagesDirectory => _packagesDirectory;
 
     public ToolLoader(
         ILoggerFactory loggerFactory,
         IToolExecutor executor,
+        string? packagesDirectory = null,
         string? toolsDirectory = null)
     {
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = loggerFactory.CreateLogger<ToolLoader>();
         _executor = executor;
         _proxyGenerator = new ToolProxyGenerator(loggerFactory.CreateLogger<ToolProxyGenerator>());
+
+        // パッケージディレクトリ（ZIPファイルを置く場所）
+        _packagesDirectory = packagesDirectory ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Clawleash", "Packages");
+
+        // 展開先ディレクトリ
         _toolsDirectory = toolsDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Clawleash", "Tools");
+    }
+
+    /// <summary>
+    /// デフォルトパッケージディレクトリの全ZIPをロード
+    /// </summary>
+    public Task<int> LoadAllAsync(Kernel kernel, bool watchForChanges = false)
+        => LoadAllFromDirectoryAsync(kernel, watchForChanges);
+
+    /// <summary>
+    /// 指定ディレクトリ内の全ZIPファイルをロード
+    /// </summary>
+    public async Task<int> LoadAllFromDirectoryAsync(Kernel kernel, bool watchForChanges = false)
+    {
+        Directory.CreateDirectory(_packagesDirectory);
+
+        var zipFiles = Directory.GetFiles(_packagesDirectory, "*.zip", SearchOption.TopDirectoryOnly);
+        var loadedCount = 0;
+
+        _logger.LogInformation("パッケージディレクトリをスキャン: {Count} 個のZIPファイル", zipFiles.Length);
+
+        foreach (var zipPath in zipFiles)
+        {
+            var result = await LoadFromZipAsync(zipPath, kernel);
+            if (result != null)
+            {
+                loadedCount++;
+            }
+        }
+
+        // ファイル変更監視を開始
+        if (watchForChanges)
+        {
+            StartWatching(kernel);
+        }
+
+        return loadedCount;
+    }
+
+    /// <summary>
+    /// ファイル変更監視を開始
+    /// </summary>
+    private void StartWatching(Kernel kernel)
+    {
+        if (_watcher != null) return;
+
+        _watcher = new FileSystemWatcher(_packagesDirectory, "*.zip")
+        {
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
+            EnableRaisingEvents = true
+        };
+
+        _watcher.Created += async (s, e) =>
+        {
+            _logger.LogInformation("新しいパッケージを検出: {Path}", e.FullPath);
+            await Task.Delay(500); // ファイルコピー完了待ち
+            await LoadFromZipAsync(e.FullPath, kernel);
+        };
+
+        _watcher.Deleted += (s, e) =>
+        {
+            var toolName = Path.GetFileNameWithoutExtension(e.FullPath);
+            if (_loadedTools.ContainsKey(toolName))
+            {
+                _logger.LogInformation("パッケージが削除されたためアンロード: {Name}", toolName);
+                Unload(toolName);
+            }
+        };
+
+        _logger.LogInformation("パッケージディレクトリの監視を開始: {Path}", _packagesDirectory);
     }
 
     /// <summary>
@@ -107,6 +187,7 @@ public class ToolLoader : IDisposable
 
             // プロキシを生成してインスタンスを作成
             var proxyInstances = new List<object>();
+            var pluginNames = new List<string>();
             foreach (var toolType in package.ToolTypes)
             {
                 var proxyType = _proxyGenerator.GenerateProxyType(toolType, _executor);
@@ -117,6 +198,7 @@ public class ToolLoader : IDisposable
 
                     // Kernel にプラグインとして登録 (実行時型を使用)
                     var pluginName = $"{package.Name}_{toolType.TypeName}";
+                    pluginNames.Add(pluginName);
                     var plugin = Microsoft.SemanticKernel.KernelPluginFactory.CreateFromObject(
                         instance,
                         pluginName);
@@ -131,7 +213,8 @@ public class ToolLoader : IDisposable
                 Version = package.Version,
                 Path = extractPath,
                 Package = package,
-                ProxyInstances = proxyInstances
+                ProxyInstances = proxyInstances,
+                PluginNames = pluginNames
             };
 
             _loadedTools[toolName] = loadedTool;
@@ -180,6 +263,7 @@ public class ToolLoader : IDisposable
             _packages[toolName] = package;
 
             var proxyInstances = new List<object>();
+            var pluginNames = new List<string>();
             foreach (var toolType in package.ToolTypes)
             {
                 var proxyType = _proxyGenerator.GenerateProxyType(toolType, _executor);
@@ -188,6 +272,7 @@ public class ToolLoader : IDisposable
                 {
                     proxyInstances.Add(instance);
                     var pluginName = $"{package.Name}_{toolType.TypeName}";
+                    pluginNames.Add(pluginName);
                     var plugin = Microsoft.SemanticKernel.KernelPluginFactory.CreateFromObject(
                         instance,
                         pluginName);
@@ -201,7 +286,8 @@ public class ToolLoader : IDisposable
                 Version = package.Version,
                 Path = dllPath,
                 Package = package,
-                ProxyInstances = proxyInstances
+                ProxyInstances = proxyInstances,
+                PluginNames = pluginNames
             };
 
             _loadedTools[toolName] = loadedTool;
@@ -272,6 +358,9 @@ public class ToolLoader : IDisposable
     {
         if (_disposed) return;
 
+        _watcher?.Dispose();
+        _watcher = null;
+
         foreach (var tool in _loadedTools.Keys.ToList())
         {
             Unload(tool);
@@ -291,6 +380,7 @@ public class LoadedTool
     public string Path { get; set; } = string.Empty;
     public ToolPackage Package { get; set; } = null!;
     public IReadOnlyList<object> ProxyInstances { get; set; } = Array.Empty<object>();
+    public List<string> PluginNames { get; set; } = new();
 }
 
 /// <summary>

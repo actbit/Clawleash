@@ -3,6 +3,7 @@ using MessagePack;
 using NetMQ;
 using NetMQ.Sockets;
 using Microsoft.Extensions.Logging;
+using Clawleash.Contracts;
 
 namespace Clawleash.Execution;
 
@@ -174,17 +175,7 @@ public class ShellServer : IAsyncDisposable
     /// <summary>
     /// デフォルトアドレスを取得
     /// </summary>
-    private static string GetDefaultAddress()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return "tcp://127.0.0.1";
-        }
-        else
-        {
-            return "tcp://127.0.0.1";
-        }
-    }
+    private static string GetDefaultAddress() => "tcp://127.0.0.1";
 
     /// <summary>
     /// Shell 実行ファイルを検索

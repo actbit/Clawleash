@@ -2,7 +2,7 @@ using MessagePack;
 using NetMQ;
 using NetMQ.Sockets;
 using Clawleash.Shell.Hosting;
-using Clawleash.Shell.IPC;
+using Clawleash.Contracts;
 using Microsoft.Extensions.Logging;
 
 namespace Clawleash.Shell.IPC;
@@ -35,7 +35,6 @@ public class IpcClient : IDisposable
     /// <summary>
     /// サーバー（Main アプリ）に接続
     /// </summary>
-    /// <param name="serverAddress">サーバーアドレス (例: "tcp://127.0.0.1:5555")</param>
     public async Task<bool> ConnectAsync(string serverAddress)
     {
         if (_isConnected)
@@ -98,13 +97,8 @@ public class IpcClient : IDisposable
         {
             try
             {
-                // メッセージを受信
                 var data = await Task.Run(() => _socket.ReceiveFrameBytes(), cancellationToken);
-
-                // メッセージを処理
                 var response = await ProcessMessageAsync(data);
-
-                // レスポンスを送信
                 _socket.SendFrame(response);
             }
             catch (NetMQException) when (cancellationToken.IsCancellationRequested)
@@ -148,15 +142,14 @@ public class IpcClient : IDisposable
     {
         try
         {
-            // メッセージタイプを判定
             var header = MessagePackSerializer.Deserialize<MessageHeader>(data);
 
             return header.Type switch
             {
-                nameof(InitializeRequest) => await HandleMessageAsync<InitializeRequest>(data),
-                nameof(ExecuteRequest) => await HandleMessageAsync<ExecuteRequest>(data),
-                nameof(ShutdownRequest) => await HandleMessageAsync<ShutdownRequest>(data),
-                nameof(PingRequest) => await HandleMessageAsync<PingRequest>(data),
+                nameof(ShellInitializeRequest) => await HandleMessageAsync<ShellInitializeRequest>(data),
+                nameof(ShellExecuteRequest) => await HandleMessageAsync<ShellExecuteRequest>(data),
+                nameof(ShellShutdownRequest) => await HandleMessageAsync<ShellShutdownRequest>(data),
+                nameof(ShellPingRequest) => await HandleMessageAsync<ShellPingRequest>(data),
                 nameof(ToolInvokeRequest) => await HandleMessageAsync<ToolInvokeRequest>(data),
                 _ => CreateErrorResponse($"不明なメッセージタイプ: {header.Type}")
             };
@@ -171,26 +164,26 @@ public class IpcClient : IDisposable
     /// <summary>
     /// 型付きメッセージを処理
     /// </summary>
-    private async Task<byte[]> HandleMessageAsync<T>(byte[] data) where T : IpcMessage
+    private async Task<byte[]> HandleMessageAsync<T>(byte[] data) where T : ShellMessage
     {
         var request = MessagePackSerializer.Deserialize<T>(data);
-        IpcMessage response;
+        ShellMessage response;
 
         switch (request)
         {
-            case InitializeRequest initReq:
+            case ShellInitializeRequest initReq:
                 response = await _runspaceHost.InitializeAsync(initReq);
                 break;
 
-            case ExecuteRequest execReq:
+            case ShellExecuteRequest execReq:
                 response = await _runspaceHost.ExecuteAsync(execReq);
                 break;
 
-            case ShutdownRequest shutdownReq:
+            case ShellShutdownRequest shutdownReq:
                 response = await HandleShutdownAsync(shutdownReq);
                 break;
 
-            case PingRequest pingReq:
+            case ShellPingRequest pingReq:
                 response = HandlePing(pingReq);
                 break;
 
@@ -199,7 +192,7 @@ public class IpcClient : IDisposable
                 break;
 
             default:
-                response = new ExecuteResponse
+                response = new ShellExecuteResponse
                 {
                     Success = false,
                     Error = $"未処理のメッセージタイプ: {typeof(T).Name}"
@@ -210,10 +203,7 @@ public class IpcClient : IDisposable
         return MessagePackSerializer.Serialize(response);
     }
 
-    /// <summary>
-    /// シャットダウン処理
-    /// </summary>
-    private async Task<ShutdownResponse> HandleShutdownAsync(ShutdownRequest request)
+    private async Task<ShellShutdownResponse> HandleShutdownAsync(ShellShutdownRequest request)
     {
         _logger.LogInformation("シャットダウン要求を受信");
 
@@ -224,24 +214,18 @@ public class IpcClient : IDisposable
             _isConnected = false;
         });
 
-        return new ShutdownResponse { Success = true };
+        return new ShellShutdownResponse { Success = true };
     }
 
-    /// <summary>
-    /// Ping処理
-    /// </summary>
-    private PingResponse HandlePing(PingRequest request)
+    private ShellPingResponse HandlePing(ShellPingRequest request)
     {
-        return new PingResponse
+        return new ShellPingResponse
         {
             Payload = $"pong: {request.Payload}",
             ProcessingTimeMs = 0
         };
     }
 
-    /// <summary>
-    /// Tool呼び出し処理
-    /// </summary>
     private async Task<ToolInvokeResponse> HandleToolInvokeAsync(ToolInvokeRequest request)
     {
         // TODO: 動的ロードしたTool DLLのメソッドを実行
@@ -255,12 +239,9 @@ public class IpcClient : IDisposable
         };
     }
 
-    /// <summary>
-    /// エラーレスポンスを作成
-    /// </summary>
     private static byte[] CreateErrorResponse(string error)
     {
-        var response = new ExecuteResponse
+        var response = new ShellExecuteResponse
         {
             Success = false,
             Error = error
@@ -268,9 +249,6 @@ public class IpcClient : IDisposable
         return MessagePackSerializer.Serialize(response);
     }
 
-    /// <summary>
-    /// 切断
-    /// </summary>
     public async Task DisconnectAsync()
     {
         if (!_isConnected) return;
@@ -304,62 +282,11 @@ public class IpcClient : IDisposable
 }
 
 /// <summary>
-/// メッセージヘッダー
+/// メッセージヘッダー（タイプ判別用）
 /// </summary>
 [MessagePackObject]
 public class MessageHeader
 {
     [Key(0)]
     public string Type { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// シェル準備完了メッセージ
-/// </summary>
-[MessagePackObject]
-public class ShellReadyMessage : IpcMessage
-{
-    [Key(10)]
-    public int ProcessId { get; set; }
-
-    [Key(11)]
-    public string Runtime { get; set; } = string.Empty;
-
-    [Key(12)]
-    public string OS { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// Tool呼び出しリクエスト
-/// </summary>
-[MessagePackObject]
-public class ToolInvokeRequest : IpcMessage
-{
-    [Key(10)]
-    public string ToolName { get; set; } = string.Empty;
-
-    [Key(11)]
-    public string MethodName { get; set; } = string.Empty;
-
-    [Key(12)]
-    public object?[] Arguments { get; set; } = Array.Empty<object?>();
-}
-
-/// <summary>
-/// Tool呼び出しレスポンス
-/// </summary>
-[MessagePackObject]
-public class ToolInvokeResponse : IpcMessage
-{
-    [Key(10)]
-    public string RequestId { get; set; } = string.Empty;
-
-    [Key(11)]
-    public bool Success { get; set; }
-
-    [Key(12)]
-    public object? Result { get; set; }
-
-    [Key(13)]
-    public string? Error { get; set; }
 }
