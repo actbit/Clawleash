@@ -113,6 +113,51 @@ prompt: |
 
 **スキルディレクトリ:** `%LocalAppData%\Clawleash\Skills\`
 
+### MCP (Model Context Protocol) クライアント
+
+外部MCPサーバーのツールをClawleash内で利用できます。
+
+| 機能 | 説明 |
+|------|------|
+| `list_tools` | MCPサーバーのツール一覧を表示 |
+| `execute_tool` | MCPツールを実行 |
+
+**トランスポート対応:**
+- **stdio**: ローカルNPXパッケージ、Dockerコンテナ
+- **SSE**: リモートMCPサーバー（今後対応）
+
+**設定例 (appsettings.json):**
+```json
+{
+  "Mcp": {
+    "Enabled": true,
+    "Servers": [
+      {
+        "Name": "github",
+        "Transport": "stdio",
+        "Command": "npx",
+        "Args": ["-y", "@modelcontextprotocol/server-github"],
+        "Environment": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "UseSandbox": true
+      },
+      {
+        "Name": "filesystem",
+        "Transport": "stdio",
+        "Command": "docker",
+        "Args": ["run", "--rm", "-i", "-v", "${WORKSPACE}:/workspace:ro", "mcp/filesystem"],
+        "UseSandbox": true
+      }
+    ]
+  }
+}
+```
+
+**セキュリティ:**
+- MCPサーバーはサンドボックス内で実行可能（`UseSandbox: true`）
+- Dockerコンテナを使用してファイルシステムを分離
+
 ---
 
 ## アーキテクチャ
@@ -156,6 +201,10 @@ Clowleash/
 │   │   └── ShellToolExecutor.cs  # IPC経由実行
 │   ├── Skills/
 │   │   └── SkillLoader.cs        # スキルローダー (YAML/JSON)
+│   ├── Mcp/
+│   │   ├── McpClientManager.cs   # MCPクライアント管理
+│   │   ├── McpServerConfig.cs    # MCPサーバー設定
+│   │   └── McpToolAdapter.cs     # Semantic Kernel統合
 │   ├── Services/
 │   │   ├── IApprovalHandler.cs   # 承認システム
 │   │   ├── IInputHandler.cs      # 入力システム

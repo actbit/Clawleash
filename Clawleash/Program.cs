@@ -1,5 +1,6 @@
 using Clawleash.Configuration;
 using Clawleash.Models;
+using Clawleash.Mcp;
 using Clawleash.Plugins;
 using Clawleash.Sandbox;
 using Clawleash.Security;
@@ -121,6 +122,9 @@ internal class Program
         // スキルローダーを登録
         services.AddSingleton<SkillLoader>();
 
+        // MCPクライアントマネージャーを登録
+        services.AddSingleton<McpClientManager>();
+
         // Semantic Kernelを登録
         services.AddSingleton<Kernel>(sp => BuildKernel(sp, settings));
 
@@ -147,6 +151,9 @@ internal class Program
         var browserManager = serviceProvider.GetRequiredService<IBrowserManager>();
         var autonomousSettings = serviceProvider.GetRequiredService<AutonomousSettings>();
         var skillLoader = serviceProvider.GetRequiredService<SkillLoader>();
+        var sandboxProvider = serviceProvider.GetService<ISandboxProvider>();
+        var mcpManager = serviceProvider.GetRequiredService<McpClientManager>();
+        var loggerFactory = serviceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
 
         // プラグインを明示的にインスタンス化して登録
         var kernel = builder.Build();
@@ -168,6 +175,28 @@ internal class Program
         {
             var loaded = await skillLoader.LoadAllAsync(watchForChanges: true);
             Console.WriteLine($"スキルを {loaded} 件ロードしました: {skillLoader.SkillsDirectory}");
+        }).Wait();
+
+        // MCPサーバーを初期化してプラグインとして登録
+        Task.Run(async () =>
+        {
+            await mcpManager.InitializeAsync(settings.Mcp);
+
+            if (mcpManager.IsEnabled)
+            {
+                var toolCount = mcpManager.GetAllTools().Count();
+                Console.WriteLine($"MCPツールを {toolCount} 件ロードしました");
+
+                // 各MCPサーバーをプラグインとして登録
+                foreach (var (serverName, server) in mcpManager.Servers)
+                {
+                    if (server.IsConnected && server.Tools.Count > 0)
+                    {
+                        var mcpPlugin = new McpServerPlugin(mcpManager, serverName, server.Tools);
+                        kernel.Plugins.AddFromObject(mcpPlugin, $"Mcp_{serverName}");
+                    }
+                }
+            }
         }).Wait();
 
         return kernel;
