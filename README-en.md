@@ -6,8 +6,9 @@
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Tests](https://img.shields.io/badge/Tests-34%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
 
-*Semantic Kernel × Playwright × PowerShell × Sandbox Architecture*
+*Semantic Kernel × Playwright × PowerShell × MCP × Sandbox Architecture*
 
 English | [**日本語**](README.md)
 
@@ -23,6 +24,8 @@ Clawleash is an **autonomous AI agent** that runs in a secure sandbox environmen
 
 - **Sandboxed Execution**: Run PowerShell/commands safely in isolated processes
 - **Tool Package System**: Add tools via ZIP/DLL packages
+- **Skill System**: Define and reuse prompt templates in YAML/JSON
+- **MCP Client**: Integrate tools from external MCP servers
 - **Approval System**: User approval required for dangerous operations
 - **Multi-Platform**: Windows (AppContainer) / Linux (Bubblewrap)
 
@@ -37,7 +40,7 @@ Clawleash is an **autonomous AI agent** that runs in a secure sandbox environmen
 | `ScrapeUrl` | Scrape a URL and get content in Markdown format |
 | `CrawlWebsite` | Crawl entire websites with multi-page content extraction |
 | `MapWebsite` | Generate sitemap (all URLs) from any website |
-| `SearchWeb` | Search the web and get results |
+| `SearchWeb` | Search the web (DuckDuckGo, no API key required) |
 | `BatchScrape` | Bulk scrape multiple URLs |
 
 ### File Operations
@@ -72,6 +75,93 @@ Clawleash is an **autonomous AI agent** that runs in a secure sandbox environmen
 - **Self-Evaluation & Correction**: Evaluate results and try alternative approaches on failure
 - **Human-in-the-Loop**: User approval required for dangerous operations
 
+### Skill System
+
+Define prompt templates as reusable "skills" and execute them.
+
+| Function | Description |
+|----------|-------------|
+| `list_skills` | List available skills |
+| `execute_skill` | Execute a specific skill |
+| `show_skill` | Show skill details |
+| `register_skill` | Register a new skill (YAML/JSON) |
+| `remove_skill` | Remove a skill |
+
+**Skill Definition Example (YAML):**
+```yaml
+name: summarize
+description: Summarize text
+version: "1.0.0"
+tags: [text, summarization]
+
+systemInstruction: |
+  You are a professional summarization assistant.
+
+parameters:
+  - name: text
+    type: string
+    description: Text to summarize
+    required: true
+  - name: style
+    type: string
+    description: Summary style
+    required: false
+    default: concise
+    enum: [concise, detailed, bullet-points]
+
+prompt: |
+  Summarize the following text in {{style}} style:
+  {{text}}
+```
+
+**Skill Directory:** `%LocalAppData%\Clawleash\Skills\`
+
+### MCP (Model Context Protocol) Client
+
+Use tools from external MCP servers within Clawleash.
+
+| Function | Description |
+|----------|-------------|
+| `list_tools` | List tools from MCP server |
+| `execute_tool` | Execute an MCP tool |
+
+**Transport Support:**
+- **stdio**: Local NPX packages, Docker containers
+- **SSE**: Remote MCP servers (coming soon)
+
+**Configuration Example (appsettings.json):**
+```json
+{
+  "Mcp": {
+    "Enabled": true,
+    "Servers": [
+      {
+        "Name": "github",
+        "Transport": "stdio",
+        "Command": "npx",
+        "Args": ["-y", "@modelcontextprotocol/server-github"],
+        "Environment": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "UseSandbox": true
+      },
+      {
+        "Name": "filesystem",
+        "Transport": "stdio",
+        "Command": "docker",
+        "Args": ["run", "--rm", "-i", "-v", "${WORKSPACE}:/workspace:ro", "mcp/filesystem"],
+        "UseSandbox": true
+      }
+    ]
+  }
+}
+```
+
+**Security:**
+- MCP servers can run in sandbox (`UseSandbox: true`)
+- Docker containers for filesystem isolation
+- Timeout settings to control response wait time
+
 ---
 
 ## Architecture
@@ -84,6 +174,9 @@ Clawleash is an **autonomous AI agent** that runs in a secure sandbox environmen
 │  │  (AI Agent) │  │ (ZIP/DLL)   │  │   (ZeroMQ Router)   │  │
 │  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
 │         │                │                     │ IPC         │
+│         ├────────────────┼─────────────────────┤             │
+│         │  SkillLoader   │   McpClientManager  │             │
+│         │  (YAML/JSON)   │   (stdio/SSE)       │             │
 │         └────────────────┴─────────────────────┘             │
 └─────────────────────────────────────────────────────────────┘
                             │
@@ -109,6 +202,14 @@ Clowleash/
 │   │   ├── ToolPackage.cs        # Package Management
 │   │   ├── ToolProxyGenerator.cs # Proxy Generation (Reflection.Emit)
 │   │   └── ShellToolExecutor.cs  # IPC Execution
+│   ├── Skills/
+│   │   └── SkillLoader.cs        # Skill Loader (YAML/JSON)
+│   ├── Mcp/
+│   │   ├── McpClientManager.cs   # MCP Client Manager
+│   │   ├── McpServerConfig.cs    # MCP Server Config
+│   │   └── McpToolAdapter.cs     # Semantic Kernel Integration
+│   ├── Models/
+│   │   └── Skill.cs              # Skill Model Definition
 │   ├── Services/
 │   │   ├── IApprovalHandler.cs   # Approval System
 │   │   ├── IInputHandler.cs      # Input System
@@ -121,16 +222,35 @@ Clowleash/
 │   │   ├── PathValidator.cs
 │   │   └── CommandValidator.cs
 │   └── Plugins/                 # Semantic Kernel Plugins
+│       ├── WebCrawlerPlugin.cs
+│       ├── BrowserActionsPlugin.cs
+│       ├── FileOperationsPlugin.cs
+│       ├── SkillPlugin.cs        # Skill Integration
+│       └── ...
 │
 ├── Clawleash.Shell/              # Sandbox Process
 │   ├── IPC/IpcClient.cs          # IPC Client (DealerSocket)
 │   └── Hosting/
 │       └── ConstrainedRunspaceHost.cs  # Constrained PowerShell
 │
-└── Clawleash.Contracts/          # Shared Types
-    └── Messages/
-        ├── ShellMessages.cs      # IPC Messages
-        └── Enums.cs              # Shared Enums
+├── Clawleash.Contracts/          # Shared Types
+│   └── Messages/
+│       ├── ShellMessages.cs      # IPC Messages
+│       └── Enums.cs              # Shared Enums
+│
+├── Clawleash.Tests/              # Unit Tests
+│   ├── Models/
+│   │   └── SkillTests.cs         # Skill parameter tests
+│   ├── Skills/
+│   │   └── SkillLoaderTests.cs   # YAML/JSON load tests
+│   └── Mcp/
+│       └── McpSettingsTests.cs   # MCP settings tests
+│
+└── sample-skills/                # Sample Skills
+    ├── summarize.skill.yaml
+    ├── translate.skill.yaml
+    ├── code-review.skill.yaml
+    └── explain.skill.yaml
 ```
 
 ---
@@ -173,6 +293,11 @@ pwsh bin/Debug/net10.0/.playwright/package/cli.js install
     "AllowedUrls": ["https://example.com/*"],
     "AllowedPaths": ["C:\\Users\\YourName\\Documents"],
     "AllowedCommands": ["Get-*", "ConvertTo-Json"]
+  },
+  "Mcp": {
+    "Enabled": true,
+    "DefaultTimeoutMs": 30000,
+    "Servers": []
   }
 }
 ```
@@ -213,6 +338,16 @@ await toolLoader.LoadAllAsync(kernel, watchForChanges: true);
 }
 ```
 
+### Adding Skills
+
+```
+%LocalAppData%\Clawleash\Skills\
+└── my-skill.skill.yaml       # YAML format
+└── my-skill.skill.json       # or JSON format
+```
+
+Hot-reload enabled: New skill files are automatically loaded when placed in the directory.
+
 ### Example
 
 ```
@@ -234,6 +369,12 @@ C:\Projects\MyApp
 └── 📝 README.md
 
 3 directories, 5 files
+
+👤 You: Summarize this text using the summarize skill
+
+🤖 Clawleash:
+[Auto-calls execute_skill]
+Summary: ...
 ```
 
 ---
@@ -252,6 +393,12 @@ C:\Projects\MyApp
 - **ConstrainedLanguage**: Default safe mode
 - **Command Whitelist**: Only allowed commands execute
 - **Path Restrictions**: Only allowed paths accessible
+
+### MCP Server Security
+
+- **Sandboxed Execution**: `UseSandbox: true` for isolated process execution
+- **Timeout Control**: `TimeoutMs` to limit response wait time
+- **Disableable**: `Enabled: false` to disable MCP functionality
 
 ### Approval System
 
@@ -287,9 +434,20 @@ services.AddSilentApprovalHandler(config);
 # Build
 dotnet build
 
-# Test
+# Run tests
 dotnet test
+
+# Verbose test output
+dotnet test --verbosity normal
 ```
+
+### Test Coverage
+
+| Category | Tests | Description |
+|----------|-------|-------------|
+| Models | 9 | Skill parameter replacement, JsonElement handling |
+| Skills | 15 | YAML/JSON loading, file watching, tag filtering |
+| Mcp | 10 | Settings deserialization, initialization, timeout |
 
 ---
 
