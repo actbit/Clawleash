@@ -8,12 +8,15 @@ namespace Clawleash.Sandbox;
 /// <summary>
 /// Windows AppContainerを使用したサンドボックスプロバイダー
 /// プロセスレベルでの分離とACLによるファイルアクセス制御を提供
+/// ケーパビリティによるネットワーク・リソースアクセス制御に対応
 /// </summary>
 public class AppContainerProvider : ISandboxProvider
 {
     private readonly ClawleashSettings _settings;
     private readonly AclManager _aclManager;
     private IntPtr _packageSid;
+    private NativeMethods.SID_AND_ATTRIBUTES[] _capabilities = Array.Empty<NativeMethods.SID_AND_ATTRIBUTES>();
+    private IntPtr _capabilitiesPtr = IntPtr.Zero;
     private bool _disposed;
     private readonly List<IntPtr> _allocatedMemory = new();
 
@@ -46,6 +49,9 @@ public class AppContainerProvider : ISandboxProvider
             throw new InvalidOperationException("AppContainer SIDの取得に失敗しました");
         }
 
+        // ケーパビリティを初期化
+        InitializeCapabilities();
+
         // 許可されたディレクトリにACLを設定
         var directoryList = allowedDirectories.ToList();
         if (directoryList.Count > 0)
@@ -55,6 +61,46 @@ public class AppContainerProvider : ISandboxProvider
 
         IsInitialized = true;
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// ケーパビリティを初期化
+    /// </summary>
+    private void InitializeCapabilities()
+    {
+        var capabilityFlags = _settings.Sandbox.Capabilities;
+
+        if (capabilityFlags == AppContainerCapability.None)
+        {
+            _capabilities = Array.Empty<NativeMethods.SID_AND_ATTRIBUTES>();
+            return;
+        }
+
+        // Flags enumから個別のケーパビリティを抽出
+        var capabilitiesList = new List<AppContainerCapability>();
+        foreach (AppContainerCapability cap in Enum.GetValues(typeof(AppContainerCapability)))
+        {
+            if (cap != AppContainerCapability.None && capabilityFlags.HasFlag(cap))
+            {
+                capabilitiesList.Add(cap);
+            }
+        }
+
+        _capabilities = NativeMethods.CreateCapabilitySids(capabilitiesList.ToArray());
+
+        // アンマネージメモリにコピー
+        if (_capabilities.Length > 0)
+        {
+            var size = Marshal.SizeOf<NativeMethods.SID_AND_ATTRIBUTES>() * _capabilities.Length;
+            _capabilitiesPtr = Marshal.AllocHGlobal(size);
+            _allocatedMemory.Add(_capabilitiesPtr);
+
+            for (int i = 0; i < _capabilities.Length; i++)
+            {
+                var ptr = _capabilitiesPtr + i * Marshal.SizeOf<NativeMethods.SID_AND_ATTRIBUTES>();
+                Marshal.StructureToPtr(_capabilities[i], ptr, false);
+            }
+        }
     }
 
     public async Task<CommandResult> ExecuteAsync(
@@ -159,8 +205,8 @@ public class AppContainerProvider : ISandboxProvider
             var capabilities = new NativeMethods.SECURITY_CAPABILITIES
             {
                 AppContainerSid = _packageSid,
-                Capabilities = IntPtr.Zero,
-                CapabilityCount = 0,
+                Capabilities = _capabilitiesPtr,
+                CapabilityCount = (uint)_capabilities.Length,
                 Reserved = 0
             };
 
@@ -278,6 +324,13 @@ public class AppContainerProvider : ISandboxProvider
         if (_disposed)
         {
             return;
+        }
+
+        // ケーパビリティSIDを解放
+        if (_capabilities.Length > 0)
+        {
+            NativeMethods.FreeCapabilitySids(_capabilities);
+            _capabilities = Array.Empty<NativeMethods.SID_AND_ATTRIBUTES>();
         }
 
         // 割り当てたメモリを解放

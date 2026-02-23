@@ -1,4 +1,5 @@
 using Clawleash.Mcp;
+using Clawleash.Sandbox;
 
 namespace Clawleash.Configuration;
 
@@ -28,6 +29,20 @@ public class SandboxSettings
     public SandboxType Type { get; set; } = SandboxType.AppContainer;
     public string DockerImage { get; set; } = "mcr.microsoft.com/powershell:7.4";
     public string AppContainerName { get; set; } = "Clawleash.Sandbox";
+
+    /// <summary>
+    /// AppContainerのケーパビリティ（ネットワーク、ライブラリアクセスなど）
+    /// デフォルトはインターネットアクセスとプライベートネットワークアクセス
+    /// </summary>
+    public AppContainerCapability Capabilities { get; set; } =
+        AppContainerCapability.InternetClient |
+        AppContainerCapability.PrivateNetworkClientServer;
+
+    /// <summary>
+    /// フォルダーごとのセキュリティポリシー
+    /// より具体的なパスが優先され、子フォルダーで親の設定を上書き可能
+    /// </summary>
+    public List<FolderPolicy> FolderPolicies { get; set; } = new();
 }
 
 public enum SandboxType
@@ -39,8 +54,16 @@ public enum SandboxType
 
 public class FileSystemSettings
 {
+    /// <summary>
+    /// 読み書きを許可するディレクトリ（古い形式、FolderPoliciesの使用を推奨）
+    /// </summary>
     public List<string> AllowedDirectories { get; set; } = new();
+
+    /// <summary>
+    /// 読み取り専用ディレクトリ（古い形式、FolderPoliciesの使用を推奨）
+    /// </summary>
     public List<string> ReadOnlyDirectories { get; set; } = new();
+
     public int MaxFileSizeMB { get; set; } = 10;
 }
 

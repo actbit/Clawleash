@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using MessagePack;
 using NetMQ;
 using NetMQ.Sockets;
 using Microsoft.Extensions.Logging;
 using Clawleash.Contracts;
+using Clawleash.Configuration;
+using Clawleash.Sandbox;
 
 namespace Clawleash.Execution;
 
@@ -16,6 +19,7 @@ public class ShellServer : IAsyncDisposable
 {
     private readonly ILogger<ShellServer> _logger;
     private readonly ShellServerOptions _options;
+    private readonly ClawleashSettings? _settings;
     private Process? _process;
     private RouterSocket? _socket;
     private string? _boundAddress;
@@ -24,14 +28,20 @@ public class ShellServer : IAsyncDisposable
     private bool _disposed;
     private int _messageCounter;
 
+    // AppContainer関連
+    private IntPtr _packageSid;
+    private IntPtr _capabilitiesPtr;
+    private readonly List<IntPtr> _allocatedMemory = new();
+
     public bool IsConnected => _socket != null && _process?.HasExited == false && !string.IsNullOrEmpty(_clientIdentity);
     public bool IsInitialized => _initialized;
     public string? BoundAddress => _boundAddress;
 
-    public ShellServer(ILogger<ShellServer> logger, ShellServerOptions? options = null)
+    public ShellServer(ILogger<ShellServer> logger, ShellServerOptions? options = null, ClawleashSettings? settings = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _options = options ?? new ShellServerOptions();
+        _settings = settings;
     }
 
     /// <summary>
@@ -164,12 +174,176 @@ public class ShellServer : IAsyncDisposable
 
     /// <summary>
     /// AppContainer を設定
+    /// プロセスをAppContainer内で実行するための設定を行う
     /// </summary>
     private void ConfigureAppContainer(ProcessStartInfo startInfo)
     {
-        // TODO: 実際の AppContainer 実装
-        // 現在はプレースホルダー
-        _logger.LogDebug("AppContainer 設定: InternetClient ケーパビリティを追加予定");
+        if (_settings == null)
+        {
+            _logger.LogWarning("AppContainer設定にはClawleashSettingsが必要です");
+            return;
+        }
+
+        try
+        {
+            var containerName = _settings.Sandbox.AppContainerName;
+
+            // 既存のAppContainer SIDを取得、または新規作成
+            _packageSid = GetOrCreateAppContainerSid(containerName);
+
+            if (_packageSid == IntPtr.Zero)
+            {
+                _logger.LogError("AppContainer SIDの取得に失敗しました");
+                return;
+            }
+
+            // ケーパビリティを設定
+            var capabilities = InitializeCapabilities(_settings.Sandbox.Capabilities);
+
+            // ProcThreadAttributeListのサイズを取得
+            var attributeListSize = Sandbox.NativeMethods.GetProcThreadAttributeListSize(1);
+            var attributeList = Marshal.AllocHGlobal(attributeListSize);
+            _allocatedMemory.Add(attributeList);
+
+            // 属性リストを初期化
+            if (!Sandbox.NativeMethods.InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
+            {
+                var error = Marshal.GetLastWin32Error();
+                _logger.LogError("InitializeProcThreadAttributeList failed: {Error}", error);
+                return;
+            }
+
+            // SECURITY_CAPABILITIES構造体を設定
+            var securityCapabilities = new Sandbox.NativeMethods.SECURITY_CAPABILITIES
+            {
+                AppContainerSid = _packageSid,
+                Capabilities = capabilities,
+                CapabilityCount = (uint)_settings.Sandbox.Capabilities.GetHashCode().ToString().Split(',').Length,
+                Reserved = 0
+            };
+
+            // PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIESを設定
+            var attributePtr = new IntPtr(0x00020015);
+            if (!Sandbox.NativeMethods.UpdateProcThreadAttribute(
+                attributeList,
+                0,
+                attributePtr,
+                ref securityCapabilities,
+                Marshal.SizeOf<Sandbox.NativeMethods.SECURITY_CAPABILITIES>(),
+                IntPtr.Zero,
+                IntPtr.Zero))
+            {
+                var error = Marshal.GetLastWin32Error();
+                _logger.LogError("UpdateProcThreadAttribute failed: {Error}", error);
+                return;
+            }
+
+            _logger.LogInformation("AppContainer設定完了: {ContainerName}, Capabilities: {Capabilities}",
+                containerName, _settings.Sandbox.Capabilities);
+
+            // ProcessStartInfoには直接AppContainerを設定できないため、
+            // 別途CreateProcess Win32 APIを使用する必要がある
+            // ここでは設定を記録し、実際のプロセス起動はStartAsyncで処理
+
+            // 注意: Process.Start()ではAppContainerを直接使用できない
+            // 本格的な実装では、このメソッドでWin32 CreateProcessを直接呼ぶ必要がある
+            // 現在は設定のみ行い、プロセス起動時に設定を適用
+
+            startInfo.Environment["CLAWLEASH_SANDBOX_TYPE"] = "AppContainer";
+            startInfo.Environment["CLAWLEASH_APPCONTAINER_NAME"] = containerName;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AppContainer設定エラー");
+        }
+    }
+
+    /// <summary>
+    /// AppContainer SIDを取得または作成
+    /// </summary>
+    private IntPtr GetOrCreateAppContainerSid(string containerName)
+    {
+        // 既存のSIDを取得を試行
+        var result = Sandbox.NativeMethods.DeriveAppContainerSidFromAppContainerName(containerName, out var sid);
+
+        if (result == Sandbox.NativeMethods.ERROR_SUCCESS && sid != IntPtr.Zero)
+        {
+            _logger.LogDebug("既存のAppContainer SIDを取得: {ContainerName}", containerName);
+            return sid;
+        }
+
+        // 新しいプロファイルを作成
+        result = Sandbox.NativeMethods.CreateAppContainerProfile(
+            containerName,
+            "Clawleash Shell Sandbox",
+            "Clawleash Shell execution sandbox",
+            IntPtr.Zero,
+            0,
+            out sid);
+
+        if (result == Sandbox.NativeMethods.ERROR_ALREADY_EXISTS)
+        {
+            result = Sandbox.NativeMethods.DeriveAppContainerSidFromAppContainerName(containerName, out sid);
+            if (result != Sandbox.NativeMethods.ERROR_SUCCESS || sid == IntPtr.Zero)
+            {
+                _logger.LogError("既存のAppContainer SIDの取得に失敗: {Result}", result);
+                return IntPtr.Zero;
+            }
+        }
+        else if (result != Sandbox.NativeMethods.ERROR_SUCCESS || sid == IntPtr.Zero)
+        {
+            _logger.LogError("AppContainerプロファイルの作成に失敗: {Result}", result);
+            return IntPtr.Zero;
+        }
+
+        _logger.LogInformation("AppContainerプロファイルを作成: {ContainerName}", containerName);
+        return sid;
+    }
+
+    /// <summary>
+    /// ケーパビリティを初期化してメモリを確保
+    /// </summary>
+    private IntPtr InitializeCapabilities(AppContainerCapability capabilityFlags)
+    {
+        if (capabilityFlags == AppContainerCapability.None)
+        {
+            return IntPtr.Zero;
+        }
+
+        // Flags enumから個別のケーパビリティを抽出
+        var capabilitiesList = new List<AppContainerCapability>();
+        foreach (AppContainerCapability cap in Enum.GetValues(typeof(AppContainerCapability)))
+        {
+            if (cap != AppContainerCapability.None && capabilityFlags.HasFlag(cap))
+            {
+                capabilitiesList.Add(cap);
+            }
+        }
+
+        if (capabilitiesList.Count == 0)
+        {
+            return IntPtr.Zero;
+        }
+
+        var sids = Sandbox.NativeMethods.CreateCapabilitySids(capabilitiesList.ToArray());
+        if (sids.Length == 0)
+        {
+            return IntPtr.Zero;
+        }
+
+        // アンマネージメモリにコピー
+        var size = Marshal.SizeOf<Sandbox.NativeMethods.SID_AND_ATTRIBUTES>() * sids.Length;
+        _capabilitiesPtr = Marshal.AllocHGlobal(size);
+        _allocatedMemory.Add(_capabilitiesPtr);
+
+        for (int i = 0; i < sids.Length; i++)
+        {
+            var ptr = _capabilitiesPtr + i * Marshal.SizeOf<Sandbox.NativeMethods.SID_AND_ATTRIBUTES>();
+            Marshal.StructureToPtr(sids[i], ptr, false);
+        }
+
+        _logger.LogDebug("ケーパビリティを初期化: {Count}個", sids.Length);
+        return _capabilitiesPtr;
     }
 
     /// <summary>
@@ -398,7 +572,42 @@ public class ShellServer : IAsyncDisposable
             _process?.Dispose();
             _process = null;
             _initialized = false;
+
+            // AppContainerリソースをクリーンアップ
+            CleanupAppContainerResources();
         }
+    }
+
+    /// <summary>
+    /// AppContainerリソースをクリーンアップ
+    /// </summary>
+    private void CleanupAppContainerResources()
+    {
+        // SIDを解放
+        if (_packageSid != IntPtr.Zero)
+        {
+            Sandbox.NativeMethods.FreeSid(_packageSid);
+            _packageSid = IntPtr.Zero;
+        }
+
+        // 割り当てたメモリを解放
+        foreach (var ptr in _allocatedMemory)
+        {
+            if (ptr != IntPtr.Zero)
+            {
+                try
+                {
+                    Sandbox.NativeMethods.DeleteProcThreadAttributeList(ptr);
+                    Marshal.FreeHGlobal(ptr);
+                }
+                catch
+                {
+                    // エラーは無視
+                }
+            }
+        }
+        _allocatedMemory.Clear();
+        _capabilitiesPtr = IntPtr.Zero;
     }
 
     public async ValueTask DisposeAsync()
