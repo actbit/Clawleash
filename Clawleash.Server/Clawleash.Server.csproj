@@ -15,12 +15,6 @@
     <ProjectReference Include="..\Clawleash.Abstractions\Clawleash.Abstractions.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.2.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
-    <PackageReference Include="System.Text.Json" Version="10.0.3" />
-  </ItemGroup>
-
   <!-- Build Svelte client before build -->
   <Target Name="BuildSpa" BeforeTargets="Build" Condition="Exists('$(SpaRoot)package.json')">
     <Message Importance="high" Text="Building Svelte client..." />
