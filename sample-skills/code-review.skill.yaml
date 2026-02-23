@@ -1,0 +1,53 @@
+# コードレビュースキル - コードをレビューし、改善点を指摘
+name: code-review
+description: コードをレビューし、改善点や問題点を指摘します
+version: "1.0.0"
+author: Clawleash
+tags:
+  - code
+  - review
+  - quality
+
+systemInstruction: |
+  あなたは経験豊富なソフトウェアエンジニアです。
+  コードの品質、セキュリティ、パフォーマンス、保守性の観点から
+  建設的なフィードバックを提供してください。
+  問題点だけでなく、良い点も指摘してください。
+
+parameters:
+  - name: code
+    type: string
+    description: レビューするコード
+    required: true
+
+  - name: language
+    type: string
+    description: プログラミング言語
+    required: true
+    example: C#, Python, JavaScript, TypeScript など
+
+  - name: focus
+    type: string
+    description: レビューの重点項目
+    required: false
+    default: すべて
+    enum:
+      - すべて
+      - セキュリティ
+      - パフォーマンス
+      - 可読性
+      - ベストプラクティス
+
+prompt: |
+  以下の{{language}}コードをレビューしてください。重点項目: {{focus}}
+
+  ```{{language}}
+  {{code}}
+  ```
+
+  レビュー結果は以下の形式で出力してください:
+  1. 概要
+  2. 良い点
+  3. 改善推奨事項
+  4. セキュリティ上の懸念（あれば）
+  5. パフォーマンス改善の提案（あれば）

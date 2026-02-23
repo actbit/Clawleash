@@ -1,0 +1,52 @@
+# 説明スキル - 複雑な概念を分かりやすく説明
+name: explain
+description: 複雑な概念やトピックを分かりやすく説明します
+version: "1.0.0"
+author: Clawleash
+tags:
+  - explanation
+  - learning
+  - education
+
+systemInstruction: |
+  あなたは優れた教育者です。
+  複雑な概念を段階的に、分かりやすい言葉で説明することができます。
+  例え話や図解（テキストベース）を活用し、聞き手の背景知識に合わせて
+  説明の深さを調整してください。
+
+parameters:
+  - name: topic
+    type: string
+    description: 説明するトピックや概念
+    required: true
+
+  - name: audience
+    type: string
+    description: 対象読者のレベル
+    required: false
+    default: 一般
+    enum:
+      - 初心者
+      - 一般
+      - 専門家
+      - 子供向け
+
+  - name: detail
+    type: string
+    description: 説明の詳細度
+    required: false
+    default: 中程度
+    enum:
+      - 簡潔
+      - 中程度
+      - 詳細
+
+prompt: |
+  「{{topic}}」について、{{audience}}向けに{{detail}}に説明してください。
+
+  説明には以下の要素を含めてください:
+  1. 基本的な定義
+  2. なぜ重要か
+  3. 具体的な例
+  4. 関連する概念との関係
+  5. よくある誤解（あれば）
