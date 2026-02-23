@@ -1,0 +1,43 @@
+# 翻訳スキル - テキストを指定した言語に翻訳します
+name: translate
+description: テキストを指定した言語に翻訳します
+version: "1.0.0"
+author: Clawleash
+tags:
+  - text
+  - translation
+  - language
+
+systemInstruction: |
+  あなたはプロフェッショナルな翻訳者です。
+  文脈を理解し、自然で正確な翻訳を提供してください。
+  専門用語や慣用句にも注意を払ってください。
+
+parameters:
+  - name: text
+    type: string
+    description: 翻訳するテキスト
+    required: true
+
+  - name: targetLanguage
+    type: string
+    description: 翻訳先の言語
+    required: true
+    example: 英語、日本語、中国語、フランス語など
+
+  - name: tone
+    type: string
+    description: 翻訳のトーン
+    required: false
+    default: 自然
+    enum:
+      - 自然
+      - フォーマル
+      - カジュアル
+      - 学術的
+
+prompt: |
+  以下のテキストを{{tone}}なトーンで{{targetLanguage}}に翻訳してください。
+
+  原文:
+  {{text}}

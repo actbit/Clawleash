@@ -1,3 +1,5 @@
+using Clawleash.Mcp;
+
 namespace Clawleash.Configuration;
 
 /// <summary>
@@ -10,6 +12,7 @@ public class ClawleashSettings
     public FileSystemSettings FileSystem { get; set; } = new();
     public PowerShellSettings PowerShell { get; set; } = new();
     public BrowserSettings Browser { get; set; } = new();
+    public McpSettings Mcp { get; set; } = new();
 }
 
 public class AISettings
