@@ -13,6 +13,7 @@ public class ClawleashSettings
     public PowerShellSettings PowerShell { get; set; } = new();
     public BrowserSettings Browser { get; set; } = new();
     public McpSettings Mcp { get; set; } = new();
+    public ChatInterfaceSettings ChatInterface { get; set; } = new();
 }
 
 public class AISettings
@@ -64,4 +65,77 @@ public class BrowserSettings
     public List<string> DeniedDomains { get; set; } = new();
     public bool Headless { get; set; } = true;
     public bool ScreenshotOnAction { get; set; } = true;
+}
+
+/// <summary>
+/// チャットインターフェース設定
+/// </summary>
+public class ChatInterfaceSettings
+{
+    /// <summary>
+    /// CLIを有効にするか
+    /// </summary>
+    public bool EnableCli { get; set; } = true;
+
+    /// <summary>
+    /// 外部インターフェースDLLを配置するディレクトリ
+    /// nullの場合はデフォルト（%LocalAppData%\Clawleash\Interfaces）
+    /// </summary>
+    public string? InterfacesDirectory { get; set; }
+
+    /// <summary>
+    /// ホットリロードを有効にするか
+    /// </summary>
+    public bool EnableHotReload { get; set; } = true;
+
+    /// <summary>
+    /// Discord設定
+    /// </summary>
+    public DiscordInterfaceSettings Discord { get; set; } = new();
+
+    /// <summary>
+    /// Slack設定
+    /// </summary>
+    public SlackInterfaceSettings Slack { get; set; } = new();
+
+    /// <summary>
+    /// WebSocket設定
+    /// </summary>
+    public WebSocketInterfaceSettings WebSocket { get; set; } = new();
+
+    /// <summary>
+    /// WebRTC設定
+    /// </summary>
+    public WebRtcInterfaceSettings WebRtc { get; set; } = new();
+}
+
+public class DiscordInterfaceSettings
+{
+    public bool Enabled { get; set; } = false;
+    public string Token { get; set; } = string.Empty;
+    public string CommandPrefix { get; set; } = "!";
+}
+
+public class SlackInterfaceSettings
+{
+    public bool Enabled { get; set; } = false;
+    public string BotToken { get; set; } = string.Empty;
+    public string AppToken { get; set; } = string.Empty;
+}
+
+public class WebSocketInterfaceSettings
+{
+    public bool Enabled { get; set; } = false;
+    public string ServerUrl { get; set; } = "ws://localhost:8080/chat";
+    public bool EnableE2ee { get; set; } = true;
+    public int ReconnectIntervalMs { get; set; } = 5000;
+    public int MaxReconnectAttempts { get; set; } = 10;
+}
+
+public class WebRtcInterfaceSettings
+{
+    public bool Enabled { get; set; } = false;
+    public string SignalingServerUrl { get; set; } = "ws://localhost:8080/signaling";
+    public bool EnableE2ee { get; set; } = true;
+    public List<string> StunServers { get; set; } = new() { "stun:stun.l.google.com:19302" };
 }

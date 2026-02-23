@@ -1,3 +1,4 @@
+using Clawleash.Abstractions.Services;
 using Clawleash.Configuration;
 using Clawleash.Models;
 using Clawleash.Mcp;
@@ -8,6 +9,7 @@ using Clawleash.Services;
 using Clawleash.Skills;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.ChatCompletion;
@@ -18,6 +20,7 @@ namespace Clawleash;
 /// <summary>
 /// Clawleash - OpenClow風の自律エージェント
 /// Semantic Kernel Agent Frameworkとサンドボックス環境による安全な実行を提供
+/// プラグインアーキテクチャによる複数入力インターフェース対応
 /// </summary>
 internal class Program
 {
@@ -26,6 +29,7 @@ internal class Program
         Console.WriteLine("================================");
         Console.WriteLine("   Clawleash Agent v1.0");
         Console.WriteLine("   OpenClow-style AI Agent");
+        Console.WriteLine("   Multi-Interface Support");
         Console.WriteLine("================================\n");
 
         try
@@ -65,7 +69,7 @@ internal class Program
             var agent = CreateAgent(serviceProvider, settings);
 
             // チャットインターフェースを開始
-            await RunChatInterfaceAsync(serviceProvider, agent);
+            await RunChatInterfaceAsync(serviceProvider, agent, settings);
         }
         catch (Exception ex)
         {
@@ -91,6 +95,13 @@ internal class Program
     private static IServiceProvider ConfigureServices(ClawleashSettings settings)
     {
         var services = new ServiceCollection();
+
+        // Logging追加
+        services.AddLogging(builder =>
+        {
+            builder.AddConsole();
+            builder.SetMinimumLevel(LogLevel.Information);
+        });
 
         // 設定を登録
         services.AddSingleton(settings);
@@ -129,8 +140,13 @@ internal class Program
         services.AddSingleton<Kernel>(sp => BuildKernel(sp, settings));
 
         // チャットインターフェースを登録
-        services.AddSingleton<IChatInterface, CliChatInterface>();
+        services.AddSingleton<CliChatInterface>();
         services.AddSingleton<ChatInterfaceManager>();
+
+        // InterfaceLoaderを登録
+        services.AddSingleton(sp => new InterfaceLoader(
+            sp,
+            settings.ChatInterface.InterfacesDirectory));
 
         return services.BuildServiceProvider();
     }
@@ -153,7 +169,7 @@ internal class Program
         var skillLoader = serviceProvider.GetRequiredService<SkillLoader>();
         var sandboxProvider = serviceProvider.GetService<ISandboxProvider>();
         var mcpManager = serviceProvider.GetRequiredService<McpClientManager>();
-        var loggerFactory = serviceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
+        var loggerFactory = serviceProvider.GetService<ILoggerFactory>();
 
         // プラグインを明示的にインスタンス化して登録
         var kernel = builder.Build();
@@ -315,10 +331,14 @@ internal class Program
         return agent;
     }
 
-    private static async Task RunChatInterfaceAsync(IServiceProvider serviceProvider, ChatCompletionAgent agent)
+    private static async Task RunChatInterfaceAsync(
+        IServiceProvider serviceProvider,
+        ChatCompletionAgent agent,
+        ClawleashSettings settings)
     {
-        var chatInterface = serviceProvider.GetRequiredService<IChatInterface>();
+        var interfaceLoader = serviceProvider.GetRequiredService<InterfaceLoader>();
         var kernel = serviceProvider.GetRequiredService<Kernel>();
+        var logger = serviceProvider.GetService<ILogger<ChatInterfaceManager>>();
 
         Console.WriteLine("チャットを開始します。終了するには 'exit' または 'quit' と入力してください\n");
 
@@ -328,19 +348,63 @@ internal class Program
             return await ProcessMessageAsync(agent, e.Content);
         }
 
-        var manager = new ChatInterfaceManager(HandleMessage);
-        manager.AddInterface(chatInterface);
+        var manager = new ChatInterfaceManager(HandleMessage, logger);
+
+        // CLIを追加（ビルトイン）
+        if (settings.ChatInterface.EnableCli)
+        {
+            var cliInterface = serviceProvider.GetRequiredService<CliChatInterface>();
+            manager.AddInterface(cliInterface);
+            Console.WriteLine("CLI interface enabled");
+        }
+
+        // 外部インターフェースを読み込み
+        var externalInterfaces = interfaceLoader.LoadExistingInterfaces();
+        foreach (var iface in externalInterfaces)
+        {
+            manager.AddInterface(iface);
+            Console.WriteLine($"Loaded interface: {iface.Name}");
+        }
+
+        Console.WriteLine($"\nInterfaces directory: {interfaceLoader.InterfacesDirectory}");
+        Console.WriteLine($"Loaded {interfaceLoader.LoadedInterfaceCount} external interface(s)\n");
+
+        // ホットリロード対応
+        if (settings.ChatInterface.EnableHotReload)
+        {
+            interfaceLoader.InterfaceLoaded += (_, e) =>
+            {
+                manager.AddInterface(e.Interface);
+                Console.WriteLine($"[Hot Reload] Interface loaded: {e.Interface.Name}");
+
+                // 自動的に開始
+                _ = e.Interface.StartAsync();
+            };
+
+            interfaceLoader.InterfaceUnloaded += async (_, e) =>
+            {
+                await manager.RemoveInterfaceAsync(e.Interface);
+                Console.WriteLine($"[Hot Unload] Interface unloaded: {e.Interface.Name}");
+            };
+
+            Console.WriteLine("Hot reload enabled. Place DLLs in the interfaces directory.\n");
+        }
 
         // インターフェースを開始
         await manager.StartAllAsync();
 
-        // CLIモードでは同期的に待機
-        while (chatInterface.IsConnected)
+        Console.WriteLine($"Active interfaces: {manager.ActiveInterfaceCount}\n");
+
+        // 待機ループ
+        while (manager.ActiveInterfaceCount > 0)
         {
             await Task.Delay(100);
         }
 
+        Console.WriteLine("\nShutting down...");
+
         await manager.DisposeAsync();
+        interfaceLoader.Dispose();
     }
 
     private static async Task<string> ProcessMessageAsync(ChatCompletionAgent agent, string userMessage)
