@@ -274,6 +274,11 @@ internal static class NativeMethods
         public uint Attributes;
     }
 
+    /// <summary>
+    /// SE_GROUP_ENABLED - The SID is enabled for security checks
+    /// </summary>
+    public const uint SE_GROUP_ENABLED = 0x00000004;
+
     #endregion
 
     #region Helper Methods
@@ -341,7 +346,7 @@ internal static class NativeMethods
                 sids.Add(new SID_AND_ATTRIBUTES
                 {
                     Sid = sid,
-                    Attributes = 0 // SE_GROUP_ENABLED
+                    Attributes = SE_GROUP_ENABLED
                 });
             }
         }
