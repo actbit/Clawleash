@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-34%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
 
-*Semantic Kernel × Playwright × PowerShell × MCP × Sandbox Architecture*
+*Semantic Kernel × Playwright × PowerShell × MCP × Sandbox Architecture × Multi-Interface*
 
 English | [**日本語**](README.md)
 
@@ -22,16 +22,105 @@ Clawleash is an **autonomous AI agent** that runs in a secure sandbox environmen
 
 ### Key Features
 
-- **Sandboxed Execution**: Run PowerShell/commands safely in isolated processes
+- **Multi-Interface Support**: CLI / Discord / Slack / WebSocket / WebRTC
+- **E2EE Support**: End-to-end encryption for WebSocket and WebRTC
+- **Sandboxed Execution**: AppContainer (Windows) / Bubblewrap (Linux) isolation
+- **Folder Policies**: Directory-level access control and network restrictions
 - **Tool Package System**: Add tools via ZIP/DLL packages
 - **Skill System**: Define and reuse prompt templates in YAML/JSON
 - **MCP Client**: Integrate tools from external MCP servers
 - **Approval System**: User approval required for dangerous operations
-- **Multi-Platform**: Windows (AppContainer) / Linux (Bubblewrap)
 
 ---
 
 ## Features
+
+### Multi-Interface Support
+
+Clawleash supports multiple input interfaces simultaneously.
+
+| Interface | Description | E2EE |
+|-----------|-------------|------|
+| **CLI** | Standard console input (built-in) | - |
+| **Discord** | Discord Bot message reception | - |
+| **Slack** | Slack Bot (HTTP API + polling) | - |
+| **WebSocket** | Real-time communication via SignalR | ✅ AES-256-GCM |
+| **WebRTC** | P2P communication via DataChannel | ✅ DTLS-SRTP |
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                       Clawleash (Main Application)                   │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │     InterfaceLoader + FileSystemWatcher (Hot Reload)            │ │
+│  │  %LocalAppData%\Clawleash\Interfaces\ monitored                  │ │
+│  │  New DLL → Auto-load → Register with ChatInterfaceManager       │ │
+│  └──────────────────────────┬──────────────────────────────────────┘ │
+│                             │                                        │
+│  ┌──────────────────────────┴──────────────────────────────────────┐ │
+│  │                   ChatInterfaceManager                           │ │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │ │
+│  │  │   CLI    │ │ Discord  │ │  Slack   │ │ WebSocket│ │ WebRTC │ │ │
+│  │  │(Built-in)│ │  (DLL)   │ │  (DLL)   │ │  (DLL)   │ │ (DLL)  │ │ │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │ │
+│  └───────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Configuration Example (appsettings.json):**
+```json
+{
+  "ChatInterface": {
+    "EnableCli": true,
+    "EnableHotReload": true,
+    "InterfacesDirectory": null,
+    "Discord": {
+      "Enabled": true,
+      "Token": "${DISCORD_BOT_TOKEN}",
+      "CommandPrefix": "!"
+    },
+    "Slack": {
+      "Enabled": true,
+      "BotToken": "${SLACK_BOT_TOKEN}"
+    },
+    "WebSocket": {
+      "Enabled": true,
+      "ServerUrl": "wss://localhost:8080/chat",
+      "EnableE2ee": true
+    },
+    "WebRtc": {
+      "Enabled": true,
+      "SignalingServerUrl": "wss://localhost:8080/signaling",
+      "EnableE2ee": true
+    }
+  }
+}
+```
+
+### E2EE (End-to-End Encryption)
+
+Enable E2EE for WebSocket and WebRTC communications.
+
+```
+┌──────────────┐                      ┌──────────────┐
+│   Client     │                      │    Server    │
+│              │                      │              │
+│  1. Exchange │ ◄─── X25519 ────────► │              │
+│              │                      │              │
+│  2. Encrypt  │                      │              │
+│  Plaintext   │                      │              │
+│     │        │                      │              │
+│     ▼        │                      │              │
+│  AES-256-GCM │                      │              │
+│     │        │                      │              │
+│     ▼        │                      │              │
+│  Ciphertext  │ ──── wss:// ────────► │  3. Decrypt  │
+│              │                      │  AES-256-GCM │
+│              │                      │     │        │
+│              │                      │     ▼        │
+│              │                      │  Plaintext   │
+└──────────────┘                      └──────────────┘
+```
 
 ### Web Crawler (Firecrawl-style)
 
@@ -114,7 +203,7 @@ prompt: |
   {{text}}
 ```
 
-**Skill Directory:** `%LocalAppData%\Clawleash\Skills\`
+**Skills Directory:** `%LocalAppData%\Clawleash\Skills\`
 
 ### MCP (Model Context Protocol) Client
 
@@ -122,45 +211,139 @@ Use tools from external MCP servers within Clawleash.
 
 | Function | Description |
 |----------|-------------|
-| `list_tools` | List tools from MCP server |
+| `list_tools` | List MCP server tools |
 | `execute_tool` | Execute an MCP tool |
 
 **Transport Support:**
 - **stdio**: Local NPX packages, Docker containers
 - **SSE**: Remote MCP servers (coming soon)
 
-**Configuration Example (appsettings.json):**
+---
+
+## Security
+
+### Sandbox
+
+| Platform | Implementation | Features |
+|----------|----------------|----------|
+| Windows | AppContainer | Capability-based access control |
+| Linux | Bubblewrap | Namespace isolation |
+
+### AppContainer Capabilities
+
+Configure capabilities to grant to the AppContainer process.
+
 ```json
 {
-  "Mcp": {
-    "Enabled": true,
-    "Servers": [
+  "Sandbox": {
+    "Type": "AppContainer",
+    "AppContainerName": "Clawleash.Sandbox",
+    "Capabilities": "InternetClient, PrivateNetworkClientServer"
+  }
+}
+```
+
+**Available Capabilities:**
+
+| Capability | Description |
+|------------|-------------|
+| `InternetClient` | Outbound internet connections |
+| `InternetClientServer` | Inbound and outbound internet connections |
+| `PrivateNetworkClientServer` | Private network connections |
+| `PicturesLibrary` | Pictures library access |
+| `VideosLibrary` | Videos library access |
+| `MusicLibrary` | Music library access |
+| `DocumentsLibrary` | Documents library access |
+| `EnterpriseAuthentication` | Enterprise authentication |
+| `SharedUserCertificates` | Shared certificates |
+| `RemovableStorage` | Removable storage access |
+| `Appointments` | Appointments access |
+| `Contacts` | Contacts access |
+
+### Folder Policies
+
+Configure detailed access control per directory. More specific paths take precedence, and child folders can override parent settings.
+
+```json
+{
+  "Sandbox": {
+    "FolderPolicies": [
       {
-        "Name": "github",
-        "Transport": "stdio",
-        "Command": "npx",
-        "Args": ["-y", "@modelcontextprotocol/server-github"],
-        "Environment": {
-          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
-        },
-        "UseSandbox": true
+        "Path": "C:\\Projects",
+        "Access": "ReadWrite",
+        "Network": "Allow",
+        "Execute": "Allow",
+        "Name": "Project Folder"
       },
       {
-        "Name": "filesystem",
-        "Transport": "stdio",
-        "Command": "docker",
-        "Args": ["run", "--rm", "-i", "-v", "${WORKSPACE}:/workspace:ro", "mcp/filesystem"],
-        "UseSandbox": true
+        "Path": "C:\\Projects\\Secrets",
+        "Access": "Deny",
+        "Network": "Deny",
+        "Name": "Sensitive Data (Access Denied)"
+      },
+      {
+        "Path": "C:\\Projects\\Public",
+        "Access": "ReadOnly",
+        "Network": "Allow",
+        "Name": "Public Area (Read-Only)"
+      },
+      {
+        "Path": "C:\\Work",
+        "Access": "ReadWrite",
+        "Network": "Allow",
+        "DeniedExtensions": ["exe", "bat", "ps1"],
+        "MaxFileSizeMB": 50,
+        "Name": "Work Folder"
+      },
+      {
+        "Path": "C:\\Work\\Downloads",
+        "Access": "ReadWrite",
+        "Network": "Allow",
+        "Execute": "Deny",
+        "EnableAudit": true,
+        "Name": "Downloads (No Execution, Audited)"
       }
     ]
   }
 }
 ```
 
-**Security:**
-- MCP servers can run in sandbox (`UseSandbox: true`)
-- Docker containers for filesystem isolation
-- Timeout settings to control response wait time
+**Policy Properties:**
+
+| Property | Values | Description |
+|----------|--------|-------------|
+| `Access` | `Deny` / `ReadOnly` / `ReadWrite` / `FullControl` | File system access |
+| `Network` | `Inherit` / `Allow` / `Deny` | Network access |
+| `Execute` | `Inherit` / `Allow` / `Deny` | Process execution |
+| `AllowedExtensions` | `[".txt", ".json"]` | Allowed file extensions |
+| `DeniedExtensions` | `[".exe", ".bat"]` | Denied file extensions |
+| `MaxFileSizeMB` | `10` | Maximum file size |
+| `EnableAudit` | `true` | Access logging |
+
+**Inheritance Rules:**
+```
+C:\Projects          → ReadWrite, Network=Allow
+  ├─ \Secrets        → Deny, Network=Deny        ← Overrides parent (disabled)
+  ├─ \Public         → ReadOnly, Network=Allow  ← Changed to read-only
+  └─ \Data
+       └─ \Sensitive → Deny                      ← Can override at any depth
+```
+
+### PowerShell Constraints
+
+- **ConstrainedLanguage**: Default safe mode
+- **Command Whitelist**: Only allowed commands execute
+- **Path Restrictions**: Only allowed paths accessible
+
+### Approval System
+
+```csharp
+// For CLI (console approval)
+services.AddCliApprovalHandler();
+
+// For automation (rule-based)
+services.AddSilentApprovalHandler(config);
+```
 
 ---
 
@@ -178,6 +361,13 @@ Use tools from external MCP servers within Clawleash.
 │         │  SkillLoader   │   McpClientManager  │             │
 │         │  (YAML/JSON)   │   (stdio/SSE)       │             │
 │         └────────────────┴─────────────────────┘             │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              ChatInterfaceManager                        │ │
+│  │  ┌─────┐ ┌─────────┐ ┌────────┐ ┌──────────┐ ┌───────┐  │ │
+│  │  │ CLI │ │ Discord │ │ Slack  │ │ WebSocket│ │ WebRTC│  │ │
+│  │  └─────┘ └─────────┘ └────────┘ └──────────┘ └───────┘  │ │
+│  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼ MessagePack over ZeroMQ
@@ -187,6 +377,17 @@ Use tools from external MCP servers within Clawleash.
 │  │  IpcClient  │  │     ConstrainedRunspaceHost         │   │
 │  │  (Dealer)   │  │     (PowerShell SDK)                │   │
 │  └─────────────┘  └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                    Clawleash.Server (Optional)               │
+│  ┌─────────────────────┐  ┌─────────────────────────────┐   │
+│  │     ChatHub         │  │     SignalingHub            │   │
+│  │  (WebSocket/E2EE)   │  │  (WebRTC Signaling)         │   │
+│  └─────────────────────┘  └─────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │     Svelte Client (Static Files)                        │ │
+│  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -205,18 +406,22 @@ Clowleash/
 │   ├── Skills/
 │   │   └── SkillLoader.cs        # Skill Loader (YAML/JSON)
 │   ├── Mcp/
-│   │   ├── McpClientManager.cs   # MCP Client Manager
-│   │   ├── McpServerConfig.cs    # MCP Server Config
+│   │   ├── McpClientManager.cs   # MCP Client Management
+│   │   ├── McpServerConfig.cs    # MCP Server Configuration
 │   │   └── McpToolAdapter.cs     # Semantic Kernel Integration
-│   ├── Models/
-│   │   └── Skill.cs              # Skill Model Definition
 │   ├── Services/
 │   │   ├── IApprovalHandler.cs   # Approval System
 │   │   ├── IInputHandler.cs      # Input System
-│   │   └── AutonomousAgentService.cs
+│   │   ├── InterfaceLoader.cs    # Interface Dynamic Loading
+│   │   ├── ChatInterfaceManager.cs # Multi-Interface Management
+│   │   └── CliChatInterface.cs   # CLI Interface
 │   ├── Sandbox/
-│   │   ├── AppContainerProvider.cs  # Windows
-│   │   └── BubblewrapProvider.cs    # Linux
+│   │   ├── AppContainerProvider.cs  # Windows (Capability Support)
+│   │   ├── BubblewrapProvider.cs    # Linux
+│   │   ├── FolderPolicy.cs          # Folder Policy Definition
+│   │   ├── FolderPolicyManager.cs   # Policy Management & Inheritance
+│   │   ├── NativeMethods.cs         # P/Invoke Definitions
+│   │   └── AclManager.cs            # ACL Management
 │   ├── Security/
 │   │   ├── UrlValidator.cs
 │   │   ├── PathValidator.cs
@@ -225,7 +430,7 @@ Clowleash/
 │       ├── WebCrawlerPlugin.cs
 │       ├── BrowserActionsPlugin.cs
 │       ├── FileOperationsPlugin.cs
-│       ├── SkillPlugin.cs        # Skill Integration
+│       ├── SkillPlugin.cs
 │       └── ...
 │
 ├── Clawleash.Shell/              # Sandbox Process
@@ -233,24 +438,50 @@ Clowleash/
 │   └── Hosting/
 │       └── ConstrainedRunspaceHost.cs  # Constrained PowerShell
 │
+├── Clawleash.Abstractions/       # Shared Interfaces
+│   ├── Services/
+│   │   ├── IChatInterface.cs     # Chat Interface
+│   │   └── ChatMessageReceivedEventArgs.cs
+│   └── Security/
+│       └── IE2eeProvider.cs      # E2EE Provider
+│
+├── Clawleash.Interfaces.Discord/ # Discord Bot Interface
+│   ├── DiscordChatInterface.cs
+│   └── DiscordSettings.cs
+│
+├── Clawleash.Interfaces.Slack/   # Slack Bot Interface
+│   ├── SlackChatInterface.cs
+│   └── SlackSettings.cs
+│
+├── Clawleash.Interfaces.WebSocket/ # WebSocket Interface (E2EE)
+│   ├── WebSocketChatInterface.cs
+│   ├── Security/
+│   │   └── AesGcmE2eeProvider.cs
+│   └── WebSocketSettings.cs
+│
+├── Clawleash.Interfaces.WebRTC/  # WebRTC Interface (E2EE)
+│   ├── WebRtcChatInterface.cs
+│   ├── Security/
+│   │   └── WebRtcE2eeProvider.cs
+│   └── WebRtcSettings.cs
+│
+├── Clawleash.Server/             # SignalR Server (WebSocket/WebRTC)
+│   ├── Hubs/
+│   │   ├── ChatHub.cs            # Chat Hub (E2EE)
+│   │   └── SignalingHub.cs       # WebRTC Signaling
+│   ├── Security/
+│   │   ├── KeyManager.cs         # Key Management
+│   │   └── E2eeMiddleware.cs     # E2EE Middleware
+│   └── Client/                   # Svelte Frontend
+│
 ├── Clawleash.Contracts/          # Shared Types
 │   └── Messages/
 │       ├── ShellMessages.cs      # IPC Messages
 │       └── Enums.cs              # Shared Enums
 │
 ├── Clawleash.Tests/              # Unit Tests
-│   ├── Models/
-│   │   └── SkillTests.cs         # Skill parameter tests
-│   ├── Skills/
-│   │   └── SkillLoaderTests.cs   # YAML/JSON load tests
-│   └── Mcp/
-│       └── McpSettingsTests.cs   # MCP settings tests
 │
 └── sample-skills/                # Sample Skills
-    ├── summarize.skill.yaml
-    ├── translate.skill.yaml
-    ├── code-review.skill.yaml
-    └── explain.skill.yaml
 ```
 
 ---
@@ -282,21 +513,37 @@ pwsh bin/Debug/net10.0/.playwright/package/cli.js install
     "ModelId": "gpt-4o",
     "Endpoint": "https://api.openai.com/v1"
   },
+  "Sandbox": {
+    "Type": "AppContainer",
+    "AppContainerName": "Clawleash.Sandbox",
+    "Capabilities": "InternetClient, PrivateNetworkClientServer",
+    "FolderPolicies": [
+      {
+        "Path": "C:\\Projects",
+        "Access": "ReadWrite",
+        "Network": "Allow",
+        "Execute": "Allow"
+      },
+      {
+        "Path": "C:\\Projects\\Secrets",
+        "Access": "Deny",
+        "Network": "Deny"
+      }
+    ]
+  },
+  "ChatInterface": {
+    "EnableCli": true,
+    "EnableHotReload": true,
+    "Discord": { "Enabled": false },
+    "Slack": { "Enabled": false },
+    "WebSocket": { "Enabled": false },
+    "WebRtc": { "Enabled": false }
+  },
   "Browser": {
     "Headless": true
   },
-  "Shell": {
-    "UseSandbox": true,
-    "LanguageMode": "ConstrainedLanguage"
-  },
-  "Security": {
-    "AllowedUrls": ["https://example.com/*"],
-    "AllowedPaths": ["C:\\Users\\YourName\\Documents"],
-    "AllowedCommands": ["Get-*", "ConvertTo-Json"]
-  },
   "Mcp": {
     "Enabled": true,
-    "DefaultTimeoutMs": 30000,
     "Servers": []
   }
 }
@@ -306,37 +553,38 @@ pwsh bin/Debug/net10.0/.playwright/package/cli.js install
 
 ## Usage
 
+### Main Application
+
 ```bash
 dotnet run --project Clawleash
 ```
 
-### Tool Package System
+### SignalR Server (for WebSocket/WebRTC)
 
-```csharp
-// Load all ZIPs from package directory
-await toolLoader.LoadAllAsync(kernel);
-
-// Enable hot-reload (auto-detect new ZIPs)
-await toolLoader.LoadAllAsync(kernel, watchForChanges: true);
+```bash
+dotnet run --project Clawleash.Server
+# Server starts at http://localhost:5000
+# /chat - WebSocket hub
+# /signaling - WebRTC signaling hub
 ```
 
-**Package Structure:**
+### Adding Interface DLLs
+
 ```
-%LocalAppData%\Clawleash\Packages\
-└── MyTool.zip
-    ├── tool-manifest.json  # Optional
-    └── MyTool.dll          # DLL with [KernelFunction] methods
+%LocalAppData%\Clawleash\Interfaces\
+├── Discord\
+│   ├── Clawleash.Interfaces.Discord.dll
+│   └── Discord.Net.dll
+├── Slack\
+│   ├── Clawleash.Interfaces.Slack.dll
+│   └── (dependencies)
+├── WebSocket\
+│   └── Clawleash.Interfaces.WebSocket.dll
+└── WebRTC\
+    └── Clawleash.Interfaces.WebRTC.dll
 ```
 
-**tool-manifest.json:**
-```json
-{
-  "name": "MyTool",
-  "version": "1.0.0",
-  "mainAssembly": "MyTool.dll",
-  "description": "Custom tool"
-}
-```
+Hot-reload enabled: New DLLs are automatically loaded when placed in the directory.
 
 ### Adding Skills
 
@@ -344,70 +592,6 @@ await toolLoader.LoadAllAsync(kernel, watchForChanges: true);
 %LocalAppData%\Clawleash\Skills\
 └── my-skill.skill.yaml       # YAML format
 └── my-skill.skill.json       # or JSON format
-```
-
-Hot-reload enabled: New skill files are automatically loaded when placed in the directory.
-
-### Example
-
-```
-👤 You: Scrape https://example.com
-
-🤖 Clawleash:
-Scraping complete:
-- Title: Example Domain
-- Content: This domain is for use in illustrative examples...
-- Links: 2
-
-👤 You: Show directory tree
-
-🤖 Clawleash:
-C:\Projects\MyApp
-├── 📁 src/
-│   └── 🔷 App.tsx
-├── 📋 package.json
-└── 📝 README.md
-
-3 directories, 5 files
-
-👤 You: Summarize this text using the summarize skill
-
-🤖 Clawleash:
-[Auto-calls execute_skill]
-Summary: ...
-```
-
----
-
-## Security
-
-### Sandbox
-
-| Platform | Implementation |
-|----------|----------------|
-| Windows | AppContainer (InternetClient capability) |
-| Linux | Bubblewrap |
-
-### PowerShell Constraints
-
-- **ConstrainedLanguage**: Default safe mode
-- **Command Whitelist**: Only allowed commands execute
-- **Path Restrictions**: Only allowed paths accessible
-
-### MCP Server Security
-
-- **Sandboxed Execution**: `UseSandbox: true` for isolated process execution
-- **Timeout Control**: `TimeoutMs` to limit response wait time
-- **Disableable**: `Enabled: false` to disable MCP functionality
-
-### Approval System
-
-```csharp
-// For CLI (console approval)
-services.AddCliApprovalHandler();
-
-// For automation (rule-based)
-services.AddSilentApprovalHandler(config);
 ```
 
 ---
@@ -440,14 +624,6 @@ dotnet test
 # Verbose test output
 dotnet test --verbosity normal
 ```
-
-### Test Coverage
-
-| Category | Tests | Description |
-|----------|-------|-------------|
-| Models | 9 | Skill parameter replacement, JsonElement handling |
-| Skills | 15 | YAML/JSON loading, file watching, tag filtering |
-| Mcp | 10 | Settings deserialization, initialization, timeout |
 
 ---
 
