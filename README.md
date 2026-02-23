@@ -72,6 +72,47 @@ Clawleash（クラウリッシュ）は、**安全なサンドボックス環境
 - **自己評価・修正**: 実行結果を評価して、失敗時は別のアプローチを試行
 - **Human-in-the-Loop**: 危険な操作にはユーザーの承認が必要
 
+### スキルシステム
+
+プロンプトテンプレートを再利用可能な「スキル」として定義・実行できます。
+
+| 機能 | 説明 |
+|------|------|
+| `list_skills` | 利用可能なスキル一覧を表示 |
+| `execute_skill` | 指定したスキルを実行 |
+| `show_skill` | スキルの詳細情報を表示 |
+| `register_skill` | 新しいスキルを登録（YAML/JSON） |
+| `remove_skill` | スキルを削除 |
+
+**スキル定義例（YAML）:**
+```yaml
+name: summarize
+description: テキストを要約します
+version: "1.0.0"
+tags: [text, summarization]
+
+systemInstruction: |
+  あなたは専門的な要約アシスタントです。
+
+parameters:
+  - name: text
+    type: string
+    description: 要約するテキスト
+    required: true
+  - name: style
+    type: string
+    description: 要約スタイル
+    required: false
+    default: 簡潔
+    enum: [簡潔, 詳細, 箇条書き]
+
+prompt: |
+  以下のテキストを{{style}}に要約してください：
+  {{text}}
+```
+
+**スキルディレクトリ:** `%LocalAppData%\Clawleash\Skills\`
+
 ---
 
 ## アーキテクチャ
@@ -84,6 +125,10 @@ Clawleash（クラウリッシュ）は、**安全なサンドボックス環境
 │  │  (AI Agent) │  │ (ZIP/DLL)   │  │   (ZeroMQ Router)   │  │
 │  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
 │         │                │                     │ IPC         │
+│         ├────────────────┤                     │             │
+│         │  SkillLoader   │                     │             │
+│         │  (YAML/JSON)   │                     │             │
+│         └────────────────┘                     │             │
 │         └────────────────┴─────────────────────┘             │
 └─────────────────────────────────────────────────────────────┘
                             │
@@ -109,6 +154,8 @@ Clowleash/
 │   │   ├── ToolPackage.cs        # パッケージ管理
 │   │   ├── ToolProxyGenerator.cs # プロキシ生成 (Reflection.Emit)
 │   │   └── ShellToolExecutor.cs  # IPC経由実行
+│   ├── Skills/
+│   │   └── SkillLoader.cs        # スキルローダー (YAML/JSON)
 │   ├── Services/
 │   │   ├── IApprovalHandler.cs   # 承認システム
 │   │   ├── IInputHandler.cs      # 入力システム

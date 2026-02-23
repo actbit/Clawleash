@@ -4,6 +4,7 @@ using Clawleash.Plugins;
 using Clawleash.Sandbox;
 using Clawleash.Security;
 using Clawleash.Services;
+using Clawleash.Skills;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
@@ -117,6 +118,9 @@ internal class Program
             StepDelayMs = 500
         });
 
+        // スキルローダーを登録
+        services.AddSingleton<SkillLoader>();
+
         // Semantic Kernelを登録
         services.AddSingleton<Kernel>(sp => BuildKernel(sp, settings));
 
@@ -142,6 +146,7 @@ internal class Program
         var powerShellExecutor = serviceProvider.GetRequiredService<IPowerShellExecutor>();
         var browserManager = serviceProvider.GetRequiredService<IBrowserManager>();
         var autonomousSettings = serviceProvider.GetRequiredService<AutonomousSettings>();
+        var skillLoader = serviceProvider.GetRequiredService<SkillLoader>();
 
         // プラグインを明示的にインスタンス化して登録
         var kernel = builder.Build();
@@ -154,6 +159,16 @@ internal class Program
         kernel.Plugins.AddFromObject(new AdvancedBrowserPlugin(browserManager), "AdvancedBrowser");
         kernel.Plugins.AddFromObject(new StructuredDataExtractionPlugin(browserManager, kernel), "DataExtraction");
         kernel.Plugins.AddFromObject(new AutonomousAgentPlugin(kernel, autonomousSettings), "AutonomousAgent");
+
+        // スキルプラグインを登録してスキルをロード
+        kernel.Plugins.AddFromObject(new SkillPlugin(skillLoader, kernel), "Skills");
+
+        // スキルをロード（非同期だが、ここでは同期的に実行）
+        Task.Run(async () =>
+        {
+            var loaded = await skillLoader.LoadAllAsync(watchForChanges: true);
+            Console.WriteLine($"スキルを {loaded} 件ロードしました: {skillLoader.SkillsDirectory}");
+        }).Wait();
 
         return kernel;
     }
@@ -225,6 +240,14 @@ internal class Program
                 - **UpdateSettings/GetSettings**: 自律実行の設定変更
                 - **EvaluateLastExecution**: 最後の実行結果を評価
 
+                ### スキルシステム（Skills）
+                - **list_skills**: 利用可能なスキル一覧を表示
+                - **execute_skill**: 指定したスキルを実行（パラメータはJSON形式）
+                - **show_skill**: スキルの詳細情報を表示
+                - **register_skill**: 新しいスキルを登録（YAML/JSON形式で定義）
+                - **remove_skill**: スキルを削除
+                - スキルはプロンプトテンプレートとして定義され、再利用可能です
+
                 ## セキュリティガイドライン
                 - 常にセキュリティを最優先してください
                 - 許可されていないパスやURLには絶対にアクセスしないでください
@@ -248,6 +271,7 @@ internal class Program
                 - AdvancedBrowser: Cookie/ストレージ、フォーム、マウス操作など
                 - DataExtraction: AIを使った構造化データ抽出
                 - AutonomousAgent: 自律的な目標実行
+                - Skills: スキルの管理・実行（プロンプトテンプレート）
 
                 ユーザーのリクエストに対して、安全かつ効率的にタスクを実行してください。
                 """,

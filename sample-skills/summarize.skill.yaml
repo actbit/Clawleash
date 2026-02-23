@@ -1,0 +1,43 @@
+# 要約スキル - テキストを指定したスタイルで要約します
+name: summarize
+description: テキストを指定したスタイルで要約します
+version: "1.0.0"
+author: Clawleash
+tags:
+  - text
+  - summarization
+
+systemInstruction: |
+  あなたは専門的な要約を行うアシスタントです。
+  重要なポイントを見逃さず、わかりやすく要約してください。
+
+parameters:
+  - name: text
+    type: string
+    description: 要約するテキスト
+    required: true
+
+  - name: style
+    type: string
+    description: 要約のスタイル
+    required: false
+    default: 簡潔
+    enum:
+      - 簡潔
+      - 詳細
+      - 箇条書き
+      - 3行
+
+  - name: language
+    type: string
+    description: 出力言語
+    required: false
+    default: 日本語
+
+prompt: |
+  以下のテキストを{{style}}なスタイルで要約してください。
+  出力は{{language}}で行ってください。
+
+  ---
+  {{text}}
+  ---
