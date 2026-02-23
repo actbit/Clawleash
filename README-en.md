@@ -2,7 +2,7 @@
 
 # Clawleash
 
-**Autonomous AI Agent Framework with Sandbox Execution**
+**Autonomous AI Agent with Sandbox Execution**
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)

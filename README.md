@@ -2,12 +2,14 @@
 
 # Clawleash
 
-**自律AIエージェントフレームワーク - サンドボックス実行環境搭載**
+**自律AIエージェント - サンドボックス実行環境搭載**
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-*Semantic Kernel × PowerShell × Sandbox Architecture*
+*Semantic Kernel × Playwright × PowerShell × Sandbox Architecture*
+
+[**English**](README-en.md) | 日本語
 
 </div>
 
@@ -15,7 +17,7 @@
 
 ## 概要
 
-Clawleash（クラウリッシュ）は、安全なサンドボックス環境で動作する自律AIエージェントフレームワークです。
+Clawleash（クラウリッシュ）は、**安全なサンドボックス環境で動作する自律AIエージェント**です。Microsoft Semantic KernelとPlaywrightをベースに、Firecrawl風のWebスクレイピング機能と自律的なブラウザ操作を実現します。
 
 ### 特徴
 
@@ -23,6 +25,54 @@ Clawleash（クラウリッシュ）は、安全なサンドボックス環境�
 - **ツールパッケージシステム**: ZIP/DLLでツールを追加可能
 - **承認システム**: 危険な操作にはユーザー承認が必要
 - **マルチプラットフォーム**: Windows (AppContainer) / Linux (Bubblewrap)
+
+---
+
+## 主な機能
+
+### Webクローラー（Firecrawl風）
+
+| 機能 | 説明 |
+|------|------|
+| `ScrapeUrl` | URLをスクレイプしてMarkdown形式でコンテンツを取得 |
+| `CrawlWebsite` | Webサイト全体をクロールして複数ページのコンテンツを取得 |
+| `MapWebsite` | サイトマップ（全URL一覧）を高速に取得 |
+| `SearchWeb` | Webを検索して結果を取得 |
+| `BatchScrape` | 複数のURLを一括スクレイプ |
+
+### ファイル操作
+
+| 機能 | 説明 |
+|------|------|
+| `CreateFile` / `ReadFile` | ファイルの作成・読み込み |
+| `ReplaceLine` / `ReplaceText` | 行・テキストの置換 |
+| `InsertLine` / `DeleteLine` | 行の挿入・削除 |
+| `MoveFile` / `CopyFile` | ファイルの移動・コピー |
+| `CreateFolder` / `DeleteFolder` | フォルダの作成・削除 |
+| `ShowTree` | ディレクトリ構造をツリー形式で表示 |
+
+### ブラウザ操作
+
+- **基本操作**: ナビゲート、クリック、テキスト入力、フォーム送信
+- **スクロール**: ページスクロール、最下部への移動
+- **待機操作**: 要素表示待機、時間待機、ページ読み込み待機
+- **キーボード**: Enter, Tab, Escape, 矢印キーなど
+- **マウス操作**: ダブルクリック、右クリック、ドラッグ＆ドロップ
+- **ストレージ**: Cookie、localStorage、sessionStorage
+
+### AI搭載データ抽出
+
+- `ExtractStructuredData`: AIを使った構造化データ抽出
+- `ExtractProductInfo`: 商品情報の自動抽出
+- `SummarizePage`: ページ内容の要約
+
+### 自律エージェント
+
+- **目標の計画・実行**: 目標を設定して、AIが自動的にタスクを分解・実行
+- **自己評価・修正**: 実行結果を評価して、失敗時は別のアプローチを試行
+- **Human-in-the-Loop**: 危険な操作にはユーザーの承認が必要
+
+---
 
 ## アーキテクチャ
 
@@ -57,7 +107,7 @@ Clowleash/
 │   ├── Tools/
 │   │   ├── ToolLoader.cs         # ツールローダー
 │   │   ├── ToolPackage.cs        # パッケージ管理
-│   │   ├── ToolProxyGenerator.cs # プロキシ生成
+│   │   ├── ToolProxyGenerator.cs # プロキシ生成 (Reflection.Emit)
 │   │   └── ShellToolExecutor.cs  # IPC経由実行
 │   ├── Services/
 │   │   ├── IApprovalHandler.cs   # 承認システム
@@ -66,10 +116,18 @@ Clowleash/
 │   ├── Sandbox/
 │   │   ├── AppContainerProvider.cs  # Windows
 │   │   └── BubblewrapProvider.cs    # Linux
+│   ├── Security/
+│   │   ├── UrlValidator.cs
+│   │   ├── PathValidator.cs
+│   │   └── CommandValidator.cs
 │   └── Plugins/                 # Semantic Kernel プラグイン
+│       ├── WebCrawlerPlugin.cs
+│       ├── BrowserActionsPlugin.cs
+│       ├── FileOperationsPlugin.cs
+│       └── ...
 │
 ├── Clawleash.Shell/              # サンドボックスプロセス
-│   ├── IPC/IpcClient.cs          # IPCクライアント
+│   ├── IPC/IpcClient.cs          # IPCクライアント (DealerSocket)
 │   └── Hosting/
 │       └── ConstrainedRunspaceHost.cs  # 制約付きPowerShell
 │
@@ -79,13 +137,23 @@ Clowleash/
         └── Enums.cs              # 共有Enum
 ```
 
+---
+
 ## インストール
 
 ```bash
+# リポジトリをクローン
 git clone https://github.com/yourusername/Clowleash.git
 cd Clawleash
+
+# 依存関係を復元
 dotnet restore
+
+# Playwrightブラウザをインストール
+pwsh bin/Debug/net10.0/.playwright/package/cli.js install
 ```
+
+---
 
 ## 設定
 
@@ -98,12 +166,22 @@ dotnet restore
     "ModelId": "gpt-4o",
     "Endpoint": "https://api.openai.com/v1"
   },
+  "Browser": {
+    "Headless": true
+  },
   "Shell": {
     "UseSandbox": true,
     "LanguageMode": "ConstrainedLanguage"
+  },
+  "Security": {
+    "AllowedUrls": ["https://example.com/*"],
+    "AllowedPaths": ["C:\\Users\\YourName\\Documents"],
+    "AllowedCommands": ["Get-*", "ConvertTo-Json"]
   }
 }
 ```
+
+---
 
 ## 使用方法
 
@@ -117,7 +195,7 @@ dotnet run --project Clawleash
 // パッケージディレクトリのZIPを一括ロード
 await toolLoader.LoadAllAsync(kernel);
 
-// ホットリロード有効
+// ホットリロード有効（新規ZIPを自動認識）
 await toolLoader.LoadAllAsync(kernel, watchForChanges: true);
 ```
 
@@ -139,6 +217,31 @@ await toolLoader.LoadAllAsync(kernel, watchForChanges: true);
 }
 ```
 
+### 使用例
+
+```
+👤 ユーザー: https://example.com をスクレイピングして
+
+🤖 Clawleash:
+スクレイピング完了:
+- タイトル: Example Domain
+- コンテンツ: This domain is for use in illustrative examples...
+- リンク: 2件
+
+👤 ユーザー: 現在のディレクトリのツリーを表示して
+
+🤖 Clawleash:
+C:\Projects\MyApp
+├── 📁 src/
+│   └── 🔷 App.tsx
+├── 📋 package.json
+└── 📝 README.md
+
+3 ディレクトリ, 5 ファイル
+```
+
+---
+
 ## セキュリティ
 
 ### サンドボックス
@@ -157,18 +260,30 @@ await toolLoader.LoadAllAsync(kernel, watchForChanges: true);
 ### 承認システム
 
 ```csharp
-// CLI用
+// CLI用（コンソールで承認確認）
 services.AddCliApprovalHandler();
 
 // 自動化用（ルールベース）
 services.AddSilentApprovalHandler(config);
 ```
 
+---
+
 ## IPC通信
 
-- **プロトコル**: ZeroMQ (Router/Dealer)
-- **シリアライズ**: MessagePack
-- **方向**: Main (Server) ← Shell (Client)
+| 項目 | 仕様 |
+|------|------|
+| プロトコル | ZeroMQ (Router/Dealer) |
+| シリアライズ | MessagePack |
+| 方向 | Main (Server) ← Shell (Client) |
+
+**メッセージ種別:**
+- `ShellExecuteRequest/Response` - コマンド実行
+- `ToolInvokeRequest/Response` - ツール呼び出し
+- `ShellInitializeRequest/Response` - 初期化
+- `ShellPingRequest/Response` - 死活監視
+
+---
 
 ## 開発
 
@@ -180,6 +295,27 @@ dotnet build
 dotnet test
 ```
 
+---
+
+## コントリビュート
+
+1. このリポジトリをフォーク
+2. フィーチャーブランチを作成 (`git checkout -b feature/amazing-feature`)
+3. 変更をコミット (`git commit -m 'Add amazing feature'`)
+4. プルリクエストを作成
+
+---
+
 ## ライセンス
 
 MIT License - [LICENSE](LICENSE) を参照
+
+---
+
+<div align="center">
+
+**Made with ❤️ by actbit**
+
+[English Version](README-en.md) | [⬆ トップに戻る](#clawleash)
+
+</div>
