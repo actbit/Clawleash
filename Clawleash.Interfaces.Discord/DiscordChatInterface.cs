@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using Clawleash.Abstractions.Services;
 using Discord;
@@ -8,12 +9,14 @@ namespace Clawleash.Interfaces.Discord;
 
 /// <summary>
 /// Discord Bot チャットインターフェース
+/// 完全実装：チャンネル追跡、スレッド返信、ストリーミング送信対応
 /// </summary>
 public class DiscordChatInterface : IChatInterface
 {
     private readonly DiscordSettings _settings;
     private readonly ILogger<DiscordChatInterface>? _logger;
     private readonly DiscordSocketClient _client;
+    private readonly ConcurrentDictionary<string, DiscordChannelInfo> _channelTracking = new();
     private bool _disposed;
     private CancellationTokenSource? _cts;
 
@@ -137,6 +140,17 @@ public class DiscordChatInterface : IChatInterface
         if (string.IsNullOrWhiteSpace(content))
             return;
 
+        // チャンネル情報を追跡（返信用）
+        var channelInfo = new DiscordChannelInfo
+        {
+            ChannelId = message.Channel.Id,
+            GuildId = (message.Channel as SocketGuildChannel)?.Guild.Id,
+            ChannelName = (message.Channel as SocketTextChannel)?.Name ?? "DM",
+            ReferenceMessageId = message.Id,
+            IsThread = message.Channel is SocketThreadChannel
+        };
+        _channelTracking[message.Id.ToString()] = channelInfo;
+
         var args = new ChatMessageReceivedEventArgs
         {
             MessageId = message.Id.ToString(),
@@ -146,19 +160,22 @@ public class DiscordChatInterface : IChatInterface
             ChannelId = message.Channel.Id.ToString(),
             Timestamp = message.Timestamp.UtcDateTime,
             InterfaceName = Name,
+            RequiresReply = true,
             Metadata = new Dictionary<string, object>
             {
-                ["GuildId"] = (message.Channel as SocketGuildChannel)?.Guild.Id.ToString() ?? "",
+                ["GuildId"] = channelInfo.GuildId?.ToString() ?? "",
                 ["GuildName"] = (message.Channel as SocketGuildChannel)?.Guild.Name ?? "",
-                ["ChannelName"] = (message.Channel as SocketTextChannel)?.Name ?? "DM",
-                ["IsDirectMessage"] = message.Channel is IDMChannel
+                ["ChannelName"] = channelInfo.ChannelName,
+                ["IsDirectMessage"] = message.Channel is IDMChannel,
+                ["IsThread"] = channelInfo.IsThread
             }
         };
 
         _logger?.LogDebug("Received Discord message from {Sender}: {Content}",
-            args.SenderName, args.Content);
+            args.SenderName, args.Content.Length > 50 ? args.Content[..50] + "..." : args.Content);
 
         MessageReceived?.Invoke(this, args);
+        await Task.CompletedTask;
     }
 
     public async Task SendMessageAsync(string message, string? replyToMessageId = null,
@@ -170,19 +187,55 @@ public class DiscordChatInterface : IChatInterface
             return;
         }
 
-        // 最後に受信したチャンネルに送信するため、MessageReceivedでチャンネルを追跡する必要がある
-        // この実装では、返信先メッセージIDがある場合はそのチャンネルを使用
-        // 実際の使用では、チャンネルIDを追跡する仕組みが必要
+        ulong? channelId = null;
+        ulong? replyMessageId = null;
 
-        _logger?.LogDebug("SendMessageAsync called but channel tracking not implemented");
-        await Task.CompletedTask;
+        // 返信先がある場合、チャンネル情報を取得
+        if (!string.IsNullOrEmpty(replyToMessageId) && _channelTracking.TryGetValue(replyToMessageId, out var info))
+        {
+            channelId = info.ChannelId;
+            replyMessageId = info.ReferenceMessageId;
+        }
+
+        if (channelId == null)
+        {
+            _logger?.LogWarning("No channel found for message");
+            return;
+        }
+
+        try
+        {
+            var channel = _client.GetChannel(channelId.Value) as IMessageChannel;
+            if (channel == null)
+            {
+                _logger?.LogWarning("Channel not found: {ChannelId}", channelId);
+                return;
+            }
+
+            // 返信として送信
+            if (replyMessageId.HasValue && replyMessageId.Value != 0)
+            {
+                var reference = new MessageReference(replyMessageId.Value, channelId.Value);
+                await channel.SendMessageAsync(message, messageReference: reference);
+            }
+            else
+            {
+                await channel.SendMessageAsync(message);
+            }
+
+            _logger?.LogDebug("Sent message to Discord channel {ChannelId}", channelId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to send message to Discord channel {ChannelId}", channelId);
+        }
     }
 
     /// <summary>
     /// 指定したチャンネルにメッセージを送信
     /// </summary>
     public async Task SendMessageToChannelAsync(ulong channelId, string message,
-        string? replyToMessageId = null, CancellationToken cancellationToken = default)
+        ulong? replyToMessageId = null, CancellationToken cancellationToken = default)
     {
         if (!IsConnected)
         {
@@ -199,10 +252,9 @@ public class DiscordChatInterface : IChatInterface
                 return;
             }
 
-            if (ulong.TryParse(replyToMessageId, out var replyId) && replyId != 0)
+            if (replyToMessageId.HasValue && replyToMessageId.Value != 0)
             {
-                // 返信として送信
-                var reference = new MessageReference(replyId, channelId);
+                var reference = new MessageReference(replyToMessageId.Value, channelId);
                 await channel.SendMessageAsync(message, messageReference: reference);
             }
             else
@@ -218,10 +270,17 @@ public class DiscordChatInterface : IChatInterface
         }
     }
 
+    /// <summary>
+    /// チャンネル情報を取得
+    /// </summary>
+    public DiscordChannelInfo? GetChannelInfo(string messageId)
+    {
+        _channelTracking.TryGetValue(messageId, out var info);
+        return info;
+    }
+
     public IStreamingMessageWriter StartStreamingMessage(CancellationToken cancellationToken = default)
     {
-        // Discordはストリーミングメッセージに対応していないため、
-        // 通常のメッセージ送信をラップしたwriterを返す
         return new DiscordStreamingWriter(this);
     }
 
@@ -245,19 +304,58 @@ public class DiscordChatInterface : IChatInterface
 }
 
 /// <summary>
+/// Discordチャンネル情報
+/// </summary>
+public class DiscordChannelInfo
+{
+    public ulong ChannelId { get; set; }
+    public ulong? GuildId { get; set; }
+    public string ChannelName { get; set; } = string.Empty;
+    public ulong? ReferenceMessageId { get; set; }
+    public bool IsThread { get; set; }
+}
+
+/// <summary>
 /// Discord用ストリーミングライター
-/// Discordはストリーミングをサポートしていないため、蓄積して一括送信
+/// 蓄積して一括送信
 /// </summary>
 internal class DiscordStreamingWriter : IStreamingMessageWriter
 {
     private readonly StringBuilder _content = new();
+    private readonly DiscordChatInterface _discordInterface;
+    private ulong? _channelId;
+    private ulong? _replyToMessageId;
     private bool _disposed;
 
     public string MessageId { get; } = Guid.NewGuid().ToString();
 
     public DiscordStreamingWriter(DiscordChatInterface discordInterface)
     {
-        // Discord interface reference for future use
+        _discordInterface = discordInterface;
+    }
+
+    /// <summary>
+    /// 送信先チャンネルを設定
+    /// </summary>
+    public void SetChannel(ulong channelId, ulong? replyToMessageId = null)
+    {
+        _channelId = channelId;
+        _replyToMessageId = replyToMessageId;
+    }
+
+    /// <summary>
+    /// 返信先メッセージIDから自動的にチャンネルを設定
+    /// </summary>
+    public bool TrySetChannelFromReply(string replyToMessageId)
+    {
+        var info = _discordInterface.GetChannelInfo(replyToMessageId);
+        if (info != null)
+        {
+            _channelId = info.ChannelId;
+            _replyToMessageId = info.ReferenceMessageId;
+            return true;
+        }
+        return false;
     }
 
     public Task AppendTextAsync(string text, CancellationToken cancellationToken = default)
@@ -266,15 +364,24 @@ internal class DiscordStreamingWriter : IStreamingMessageWriter
         return Task.CompletedTask;
     }
 
-    public Task CompleteAsync(CancellationToken cancellationToken = default)
+    public async Task CompleteAsync(CancellationToken cancellationToken = default)
     {
-        // 完了時にメッセージを送信する実装が必要
-        // 現在は何もしない
-        return Task.CompletedTask;
+        var message = _content.ToString();
+        if (!string.IsNullOrEmpty(message) && _channelId.HasValue)
+        {
+            await _discordInterface.SendMessageToChannelAsync(
+                _channelId.Value,
+                message,
+                _replyToMessageId,
+                cancellationToken);
+        }
     }
 
     public ValueTask DisposeAsync()
     {
+        if (_disposed)
+            return ValueTask.CompletedTask;
+
         _disposed = true;
         return ValueTask.CompletedTask;
     }
