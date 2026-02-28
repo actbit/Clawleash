@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ master, main,feature/** ]
+    branches: [ master, main, feature/** ]
   pull_request:
     branches: [ master, main ]
   workflow_dispatch:
@@ -11,8 +11,8 @@ env:
   DOTNET_VERSION: '10.0.x'
 
 jobs:
-  build:
-    runs-on: windows-latest
+  build-and-test:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,10 +25,10 @@ jobs:
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
-            path: ~/.nuget/packages
-            key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-            restore-keys: |
-              ${{ runner.os }}-nuget-
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
       - name: Restore dependencies
         run: dotnet restore
@@ -39,17 +39,20 @@ jobs:
       - name: Test
         run: dotnet test --configuration Release --no-build --verbosity normal
 
-  # Build NuGet packages for interfaces
+      - name: Format Check
+        run: dotnet format --verify-no-changes --verbosity diagnostic
+        continue-on-error: true
+
   pack-interfaces:
-    needs: build
-    runs-on: windows-latest
+    needs: build-and-test
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - project: Clawleash.Interfaces.WebRTC
-          - project: Clawleash.Interfaces.WebSocket
-          - project: Clawleash.Interfaces.Discord
-          - project: Clawleash.Interfaces.Slack
+        project:
+          - Clawleash.Interfaces.WebRTC
+          - Clawleash.Interfaces.WebSocket
+          - Clawleash.Interfaces.Discord
+          - Clawleash.Interfaces.Slack
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -59,11 +62,18 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
       - name: Restore dependencies
         run: dotnet restore ${{ matrix.project }}/${{ matrix.project }}.csproj
 
       - name: Pack
-        continue-on-error: true
         run: dotnet pack ${{ matrix.project }}/${{ matrix.project }}.csproj --configuration Release --output ./artifacts
 
       - name: Upload package
@@ -73,23 +83,3 @@ jobs:
           path: artifacts/*.nupkg
           retention-days: 7
           if-no-files-found: ignore
-
-  # Lint and format check
-  lint:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Restore dependencies
-        run: dotnet restore
-
-      - name: Format Check
-        run: dotnet format --verify-no-changes --verbosity diagnostic
-        continue-on-error: true
