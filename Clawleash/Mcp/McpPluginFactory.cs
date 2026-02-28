@@ -61,8 +61,11 @@ public static class McpPluginFactory
             functions.Add(function);
         }
 
+        // プラグイン名を正規化（ハイフン等をアンダースコアに変換）
+        var normalizedServerName = serverName.Replace("-", "_").Replace(" ", "_");
+
         return KernelPluginFactory.CreateFromFunctions(
-            pluginName: $"Mcp_{serverName}",
+            pluginName: $"Mcp_{normalizedServerName}",
             description: $"MCP Server: {serverName}",
             functions: functions);
     }
