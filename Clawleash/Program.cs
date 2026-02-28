@@ -348,7 +348,11 @@ internal class Program
             return await ProcessMessageAsync(agent, e.Content);
         }
 
-        var manager = new ChatInterfaceManager(HandleMessage, logger);
+        var managerSettings = new ChatInterfaceManagerSettings
+        {
+            BroadcastReplies = settings.ChatInterface.BroadcastReplies
+        };
+        var manager = new ChatInterfaceManager(HandleMessage, managerSettings, logger);
 
         // CLIを追加（ビルトイン）
         if (settings.ChatInterface.EnableCli)
