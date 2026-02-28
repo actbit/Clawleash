@@ -37,6 +37,7 @@
 
   <ItemGroup>
     <PackageReference Include="Lucid.Rtc" Version="0.1.4" />
+    <PackageReference Include="Lucid.Rtc.Rust.All" Version="0.1.4" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.3" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
   </ItemGroup>
