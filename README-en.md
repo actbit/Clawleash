@@ -6,7 +6,7 @@
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-34%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
+[![Tests](https://img.shields.io/badge/Tests-58%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
 
 *Semantic Kernel × Playwright × PowerShell × MCP × Sandbox Architecture × Multi-Interface*
 
@@ -216,7 +216,7 @@ Use tools from external MCP servers within Clawleash.
 
 **Transport Support:**
 - **stdio**: Local NPX packages, Docker containers
-- **SSE**: Remote MCP servers (coming soon)
+- **SSE**: Remote MCP servers (HTTP Server-Sent Events)
 
 ---
 

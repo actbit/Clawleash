@@ -6,7 +6,7 @@
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-34%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
+[![Tests](https://img.shields.io/badge/Tests-58%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
 
 *Semantic Kernel × Playwright × PowerShell × MCP × Sandbox Architecture × Multi-Interface*
 
@@ -216,7 +216,7 @@ prompt: |
 
 **トランスポート対応:**
 - **stdio**: ローカルNPXパッケージ、Dockerコンテナ
-- **SSE**: リモートMCPサーバー（今後対応）
+- **SSE**: リモートMCPサーバー（HTTP Server-Sent Events）
 
 ---
 
