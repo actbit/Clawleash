@@ -615,17 +615,263 @@ dotnet run --project Clawleash.Server
 
 ## IPC通信
 
+Main プロセスと Shell プロセス間の通信には ZeroMQ + MessagePack を使用します。
+
+### 通信仕様
+
 | 項目 | 仕様 |
 |------|------|
-| プロトコル | ZeroMQ (Router/Dealer) |
-| シリアライズ | MessagePack |
-| 方向 | Main (Server) ← Shell (Client) |
+| ライブラリ | NetMQ (ZeroMQ .NET実装) |
+| パターン | Router/Dealer |
+| シリアライズ | MessagePack (Union属性によるポリモーフィズム) |
+| トランスポート | TCP (localhost) |
+| 方向 | Main (Router/Server) ↔ Shell (Dealer/Client) |
 
-**メッセージ種別:**
-- `ShellExecuteRequest/Response` - コマンド実行
-- `ToolInvokeRequest/Response` - ツール呼び出し
-- `ShellInitializeRequest/Response` - 初期化
-- `ShellPingRequest/Response` - 死活監視
+### アーキテクチャ
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Main プロセス                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              RouterSocket (Server)                       │ │
+│  │  - ランダムポートでバインド                               │ │
+│  │  - 複数クライアント接続可能                               │ │
+│  │  - Identity でクライアント識別                            │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                    ZeroMQ (TCP)
+                            │
+┌─────────────────────────────────────────────────────────────┐
+│                   Shell プロセス (Sandboxed)                  │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              DealerSocket (Client)                       │ │
+│  │  - 動的に割り当てられたIdentity                          │ │
+│  │  - 非同期リクエスト/レスポンス                            │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 接続フロー
+
+```
+Main                                Shell
+  │                                   │
+  │  1. RouterSocket.BindRandomPort  │
+  │     (例: tcp://127.0.0.1:5555)   │
+  │                                   │
+  │                     2. プロセス起動 --server "tcp://..."
+  │                                   │
+  │                     3. DealerSocket.Connect()
+  │                                   │
+  │  ◄─────── ShellReadyMessage ───── │
+  │     (ProcessId, Runtime, OS)     │
+  │                                   │
+  │  ──── ShellInitializeRequest ────►│
+  │     (AllowedCommands, Paths)     │
+  │                                   │
+  │  ◄─── ShellInitializeResponse ───│
+  │     (Success, Version)           │
+  │                                   │
+  │         準備完了                   │
+```
+
+### メッセージ一覧
+
+#### 基本メッセージ（全メッセージ共通）
+
+```csharp
+public abstract class ShellMessage
+{
+    public string MessageId { get; set; }      // 一意識別子
+    public DateTime Timestamp { get; set; }    // UTC タイムスタンプ
+}
+```
+
+#### 1. ShellReadyMessage (Shell → Main)
+
+接続完了時に送信される準備完了通知。
+
+```csharp
+public class ShellReadyMessage : ShellMessage
+{
+    public int ProcessId { get; set; }        // Shell プロセス ID
+    public string Runtime { get; set; }       // .NET ランタイム情報
+    public string OS { get; set; }            // OS 情報
+}
+```
+
+#### 2. ShellInitializeRequest/Response (Main ↔ Shell)
+
+Shell 実行環境の初期化。
+
+**Request:**
+```csharp
+public class ShellInitializeRequest : ShellMessage
+{
+    public string[] AllowedCommands { get; set; }    // 許可コマンド
+    public string[] AllowedPaths { get; set; }       // 読み書き許可パス
+    public string[] ReadOnlyPaths { get; set; }      // 読み取り専用パス
+    public ShellLanguageMode LanguageMode { get; set; } // ConstrainedLanguage
+}
+```
+
+**Response:**
+```csharp
+public class ShellInitializeResponse : ShellMessage
+{
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+    public string Version { get; set; }
+    public string Runtime { get; set; }
+}
+```
+
+#### 3. ShellExecuteRequest/Response (Main ↔ Shell)
+
+PowerShell コマンドの実行。
+
+**Request:**
+```csharp
+public class ShellExecuteRequest : ShellMessage
+{
+    public string Command { get; set; }              // 実行コマンド
+    public Dictionary<string, object?> Parameters { get; set; }
+    public string? WorkingDirectory { get; set; }
+    public int TimeoutMs { get; set; } = 30000;
+    public ShellExecutionMode Mode { get; set; }
+}
+```
+
+**Response:**
+```csharp
+public class ShellExecuteResponse : ShellMessage
+{
+    public string RequestId { get; set; }
+    public bool Success { get; set; }
+    public string Output { get; set; }              // 標準出力
+    public string? Error { get; set; }              // エラーメッセージ
+    public int ExitCode { get; set; }
+    public Dictionary<string, object?> Metadata { get; set; }
+}
+```
+
+#### 4. ToolInvokeRequest/Response (Main ↔ Shell)
+
+ツールパッケージのメソッド呼び出し。
+
+**Request:**
+```csharp
+public class ToolInvokeRequest : ShellMessage
+{
+    public string ToolName { get; set; }            // ツール名
+    public string MethodName { get; set; }          // メソッド名
+    public object?[] Arguments { get; set; }        // 引数
+}
+```
+
+**Response:**
+```csharp
+public class ToolInvokeResponse : ShellMessage
+{
+    public string RequestId { get; set; }
+    public bool Success { get; set; }
+    public object? Result { get; set; }             // 戻り値
+    public string? Error { get; set; }
+}
+```
+
+#### 5. ShellPingRequest/Response (Main ↔ Shell)
+
+死活監視・レイテンシ測定。
+
+**Request:**
+```csharp
+public class ShellPingRequest : ShellMessage
+{
+    public string Payload { get; set; } = "ping";
+}
+```
+
+**Response:**
+```csharp
+public class ShellPingResponse : ShellMessage
+{
+    public string Payload { get; set; } = "pong";
+    public long ProcessingTimeMs { get; set; }      // 処理時間
+}
+```
+
+#### 6. ShellShutdownRequest/Response (Main ↔ Shell)
+
+Shell プロセスのシャットダウン。
+
+**Request:**
+```csharp
+public class ShellShutdownRequest : ShellMessage
+{
+    public bool Force { get; set; }                 // 強制終了フラグ
+}
+```
+
+**Response:**
+```csharp
+public class ShellShutdownResponse : ShellMessage
+{
+    public bool Success { get; set; }
+}
+```
+
+### MessagePack シリアライズ
+
+```csharp
+// Union 属性でポリモーフィック デシリアライズ
+[MessagePackObject]
+[Union(0, typeof(ShellExecuteRequest))]
+[Union(1, typeof(ShellExecuteResponse))]
+[Union(2, typeof(ShellInitializeRequest))]
+// ...
+public abstract class ShellMessage { ... }
+
+// シリアライズ
+var data = MessagePackSerializer.Serialize(request);
+
+// デシリアライズ
+var message = MessagePackSerializer.Deserialize<ShellMessage>(data);
+```
+
+### エラーハンドリング
+
+```csharp
+try
+{
+    var response = await shellServer.ExecuteAsync(request);
+    if (!response.Success)
+    {
+        // コマンド実行失敗
+        Console.WriteLine($"Error: {response.Error}");
+    }
+}
+catch (TimeoutException)
+{
+    // Shell からの応答なし
+}
+catch (InvalidOperationException)
+{
+    // Shell に接続されていない
+}
+```
+
+### タイムアウト設定
+
+```csharp
+var options = new ShellServerOptions
+{
+    StartTimeoutMs = 10000,           // 起動タイムアウト
+    CommunicationTimeoutMs = 30000,   // 通信タイムアウト
+    Verbose = true                    // 詳細ログ
+};
+```
 
 ---
 
