@@ -586,6 +586,23 @@ dotnet run --project Clawleash.Server
 
 ホットリロード対応：新しいDLLを配置すると自動的に読み込まれます。
 
+### カスタムプロバイダーの作成
+
+独自のチャットインターフェースを作成して追加できます。
+
+**手順:**
+1. `Clawleash.Abstractions` を参照したクラスライブラリプロジェクトを作成
+2. `IChatInterface` を実装
+3. ビルドして `%LocalAppData%\Clawleash\Interfaces\` に配置
+
+詳細な開発ガイドは [Clawleash.Abstractions/README.md](Clawleash.Abstractions/README.md) を参照してください。
+
+**実装例:**
+- [Discord](Clawleash.Interfaces.Discord) - Discord Bot
+- [Slack](Clawleash.Interfaces.Slack) - Slack Bot
+- [WebSocket](Clawleash.Interfaces.WebSocket) - WebSocket (E2EE)
+- [WebRTC](Clawleash.Interfaces.WebRTC) - WebRTC (E2EE)
+
 ### スキルの追加
 
 ```
@@ -609,6 +626,272 @@ dotnet run --project Clawleash.Server
 - `ToolInvokeRequest/Response` - ツール呼び出し
 - `ShellInitializeRequest/Response` - 初期化
 - `ShellPingRequest/Response` - 死活監視
+
+---
+
+## 拡張機能の開発
+
+### MCPサーバーの追加
+
+外部MCPサーバーを追加して、そのツールをClawleash内で使用できます。
+
+**appsettings.json:**
+
+```json
+{
+  "Mcp": {
+    "Enabled": true,
+    "Servers": [
+      {
+        "name": "filesystem",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
+        "enabled": true,
+        "timeoutMs": 30000,
+        "useSandbox": true
+      },
+      {
+        "name": "github",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "environment": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "enabled": true
+      },
+      {
+        "name": "remote-server",
+        "transport": "sse",
+        "url": "https://api.example.com/mcp/sse",
+        "headers": {
+          "Authorization": "Bearer ${API_KEY}"
+        },
+        "enabled": true,
+        "timeoutMs": 60000
+      }
+    ]
+  }
+}
+```
+
+**MCP設定プロパティ:**
+
+| プロパティ | 説明 | 必須 |
+|-----------|------|------|
+| `name` | サーバー名（一意識別子） | ✅ |
+| `transport` | `stdio` または `sse` | ✅ |
+| `command` | 実行コマンド（stdio用） | stdio時 |
+| `args` | コマンド引数 | |
+| `environment` | 環境変数 | |
+| `url` | サーバーURL（SSE用） | SSE時 |
+| `headers` | HTTPヘッダー（SSE用） | |
+| `enabled` | 有効/無効 | |
+| `timeoutMs` | タイムアウト（ミリ秒） | |
+| `useSandbox` | サンドボックスで実行 | |
+
+**使用可能なツールの確認:**
+
+```
+ユーザー: MCPサーバーのツール一覧を表示して
+AI: list_tools ツールを実行してツール一覧を表示
+```
+
+### ツールパッケージの作成
+
+ネイティブなFunction CallingライブラリをZIPパッケージとして追加できます。
+
+**1. プロジェクト作成**
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SemanticKernel.Core" Version="1.*" />
+  </ItemGroup>
+</Project>
+```
+
+**2. ツールクラスの実装**
+
+```csharp
+using Microsoft.SemanticKernel;
+
+namespace MyTools;
+
+public class WeatherTools
+{
+    [KernelFunction("get_weather")]
+    [Description("指定した都市の天気を取得します")]
+    public async Task<string> GetWeatherAsync(
+        [Description("都市名")] string city,
+        [Description("単位（celsius/fahrenheit）")] string unit = "celsius")
+    {
+        // 天気取得ロジック
+        return $"{city}の天気: 晴れ, 気温: 25{unit}";
+    }
+
+    [KernelFunction("get_forecast")]
+    [Description("天気予報を取得します")]
+    public async Task<string> GetForecastAsync(
+        [Description("都市名")] string city,
+        [Description("予報日数（1-7）")] int days = 3)
+    {
+        return $"{city}の{days}日間予報: 晴れ→曇り→雨";
+    }
+}
+```
+
+**3. マニフェスト作成（tool-manifest.json）**
+
+```json
+{
+  "name": "WeatherTools",
+  "version": "1.0.0",
+  "description": "天気情報ツール",
+  "mainAssembly": "MyTools.dll",
+  "dependencies": []
+}
+```
+
+**4. パッケージ作成**
+
+```bash
+# ZIPパッケージを作成
+zip -r WeatherTools.zip MyTools.dll tool-manifest.json
+
+# 配置
+cp WeatherTools.zip "%LocalAppData%\Clawleash\Packages\"
+```
+
+**パッケージ構成:**
+
+```
+WeatherTools.zip
+├── tool-manifest.json     # マニフェスト
+├── MyTools.dll            # メインアセンブリ
+└── (依存DLL)              # 必要に応じて
+```
+
+**ホットリロード:** PackagesディレクトリにZIPを配置すると自動的にロードされます。
+
+#### ネイティブツールパッケージ vs MCP
+
+| 項目 | ネイティブツールパッケージ | MCP |
+|------|--------------------------|-----|
+| **実行環境** | サンドボックス内で直接実行 | 外部プロセス |
+| **アクセス制御** | AppContainer + フォルダーポリシー | MCPサーバー側で制御 |
+| **ネットワーク** | ケーパビリティで制御 | MCPサーバー次第 |
+| **プロセス分離** | Shellプロセス内で分離 | 完全に別プロセス |
+| **監査** | 詳細ログ可能 | MCPサーバー依存 |
+| **デプロイ** | ZIPで簡単配置 | MCPサーバー構築必要 |
+
+**ネイティブツールパッケージが推奨されるケース:**
+- 社内ツール・機密データを扱うツール
+- 厳密なアクセス制御が必要な場合
+- 監査ログが必須な環境
+- ネットワークアクセスを制限したい場合
+
+**MCPが推奨されるケース:**
+- 既存のMCPサーバーを利用したい場合
+- 外部サービスとの連携
+- コミュニティ提供のツールを使用したい場合
+
+### サンドボックス実行の仕組み
+
+ツールパッケージとシェルコマンドは、サンドボックス環境内で安全に実行されます。
+
+**アーキテクチャ:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Clawleash (Main Process)                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   Kernel    │  │ ToolLoader  │  │   ShellServer       │  │
+│  │  (AI Agent) │  │ (ZIP/DLL)   │  │   (ZeroMQ Router)   │  │
+│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
+│         │                │                     │             │
+│         │  ToolProxy     │                     │ IPC         │
+│         │  (経由で呼出)   │                     │             │
+└─────────┼────────────────┼─────────────────────┼─────────────┘
+          │                │                     │
+          ▼                ▼                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Clawleash.Shell (Sandboxed Process)             │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │           AssemblyLoadContext (分離ロード)               │ │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │ │
+│  │  │  Tool DLL   │  │  Tool DLL   │  │  PowerShell     │  │ │
+│  │  │  (分離済み)  │  │  (分離済み)  │  │  Constrained    │  │ │
+│  │  └─────────────┘  └─────────────┘  └─────────────────┘  │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │           AppContainer (Windows) / Bubblewrap (Linux)   │ │
+│  │  - ファイルシステムアクセス制御                           │ │
+│  │  - ネットワークアクセス制御                               │ │
+│  │  - プロセス実行制御                                       │ │
+│  │  - フォルダーポリシー適用                                 │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**実行フロー:**
+
+1. **ツール呼び出し時:**
+   - Kernel → ToolProxy → ShellServer (IPC)
+   - ShellServer → Shell (サンドボックス内)
+   - Shell → AssemblyLoadContext → Tool DLL
+   - 結果を逆順で返却
+
+2. **分離の仕組み:**
+   - 各ツールパッケージは独立した`AssemblyLoadContext`でロード
+   - アンロード可能（`isCollectible: true`）
+   - ツール削除時にメモリ解放
+
+3. **セキュリティ境界:**
+   - **プロセス分離**: Main ↔ Shell は別プロセス
+   - **OSレベル分離**: AppContainer/Bubblewrap でリソース制限
+   - **フォルダーポリシー**: パスごとのアクセス制御
+
+**AppContainerケーパビリティ（Windows）:**
+
+```json
+{
+  "Sandbox": {
+    "Type": "AppContainer",
+    "AppContainerName": "Clawleash.Sandbox",
+    "Capabilities": "InternetClient, PrivateNetworkClientServer"
+  }
+}
+```
+
+| ケーパビリティ | 許可される操作 |
+|--------------|---------------|
+| `InternetClient` | インターネットへの送信接続 |
+| `PrivateNetworkClientServer` | プライベートネットワークへの接続 |
+| なし | ネットワークアクセス禁止 |
+
+**フォルダーポリシーによる制御:**
+
+```json
+{
+  "Sandbox": {
+    "FolderPolicies": [
+      {
+        "Path": "C:\\Work",
+        "Access": "ReadWrite",
+        "Execute": "Deny",
+        "DeniedExtensions": [".exe", ".bat", ".ps1"]
+      }
+    ]
+  }
+}
+```
 
 ---
 

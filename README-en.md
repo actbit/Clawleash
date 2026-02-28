@@ -586,6 +586,23 @@ dotnet run --project Clawleash.Server
 
 Hot-reload enabled: New DLLs are automatically loaded when placed in the directory.
 
+### Creating Custom Providers
+
+You can create and add your own chat interfaces.
+
+**Steps:**
+1. Create a class library project referencing `Clawleash.Abstractions`
+2. Implement `IChatInterface`
+3. Build and place in `%LocalAppData%\Clawleash\Interfaces\`
+
+See [Clawleash.Abstractions/README.md](Clawleash.Abstractions/README.md) for detailed development guide.
+
+**Example Implementations:**
+- [Discord](Clawleash.Interfaces.Discord) - Discord Bot
+- [Slack](Clawleash.Interfaces.Slack) - Slack Bot
+- [WebSocket](Clawleash.Interfaces.WebSocket) - WebSocket (E2EE)
+- [WebRTC](Clawleash.Interfaces.WebRTC) - WebRTC (E2EE)
+
 ### Adding Skills
 
 ```
@@ -609,6 +626,243 @@ Hot-reload enabled: New DLLs are automatically loaded when placed in the directo
 - `ToolInvokeRequest/Response` - Tool invocation
 - `ShellInitializeRequest/Response` - Initialization
 - `ShellPingRequest/Response` - Health check
+
+---
+
+## Developing Extensions
+
+### Adding MCP Servers
+
+Add external MCP servers to use their tools within Clawleash.
+
+**appsettings.json:**
+
+```json
+{
+  "Mcp": {
+    "Enabled": true,
+    "Servers": [
+      {
+        "name": "filesystem",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
+        "enabled": true,
+        "timeoutMs": 30000,
+        "useSandbox": true
+      },
+      {
+        "name": "github",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "environment": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "enabled": true
+      },
+      {
+        "name": "remote-server",
+        "transport": "sse",
+        "url": "https://api.example.com/mcp/sse",
+        "headers": {
+          "Authorization": "Bearer ${API_KEY}"
+        },
+        "enabled": true,
+        "timeoutMs": 60000
+      }
+    ]
+  }
+}
+```
+
+**MCP Configuration Properties:**
+
+| Property | Description | Required |
+|----------|-------------|----------|
+| `name` | Server name (unique identifier) | ✅ |
+| `transport` | `stdio` or `sse` | ✅ |
+| `command` | Command to execute (stdio) | stdio |
+| `args` | Command arguments | No |
+| `environment` | Environment variables | No |
+| `url` | Server URL (SSE) | sse |
+| `headers` | HTTP headers (SSE) | No |
+| `enabled` | Enable/disable server | No |
+| `timeoutMs` | Timeout in milliseconds | No |
+| `useSandbox` | Run in sandbox | No |
+
+### Adding Tool Packages (Native Function Calling)
+
+Create custom tools using Semantic Kernel's `[KernelFunction]` attribute.
+
+**Project Structure:**
+
+```
+MyToolPackage/
+├── MyToolPackage.csproj
+├── WeatherTools.cs
+└── tool-manifest.json (optional)
+```
+
+**tool-manifest.json:**
+
+```json
+{
+  "name": "WeatherTools",
+  "version": "1.0.0",
+  "description": "Weather information tools",
+  "mainAssembly": "MyToolPackage.dll"
+}
+```
+
+**WeatherTools.cs:**
+
+```csharp
+using System.ComponentModel;
+using Microsoft.SemanticKernel;
+
+namespace MyToolPackage;
+
+public class WeatherTools
+{
+    [KernelFunction("get_weather")]
+    [Description("Get weather for specified city")]
+    public async Task<string> GetWeatherAsync(
+        [Description("City name")] string city,
+        [Description("Unit (celsius/fahrenheit)")] string unit = "celsius")
+    {
+        // Weather retrieval logic
+        return $"Weather in {city}: Sunny, Temperature: 25{unit}";
+    }
+}
+```
+
+**Deployment:**
+
+```bash
+# Create ZIP package
+cd MyToolPackage/bin/Release/net10.0
+zip -r ../../weather-tools.zip .
+
+# Copy to packages directory
+cp ../../weather-tools.zip "%LocalAppData%/Clawleash/Packages/"
+```
+
+**Tool Package Directory:** `%LocalAppData%\Clawleash\Packages\`
+
+Hot-reload enabled: New ZIP files are automatically loaded when placed in the directory.
+
+#### Native Tool Packages vs MCP
+
+| Aspect | Native Tool Packages | MCP |
+|--------|---------------------|-----|
+| **Execution** | Direct execution in sandbox | External process |
+| **Access Control** | AppContainer + Folder policies | Controlled by MCP server |
+| **Network** | Capability-based control | Depends on MCP server |
+| **Process Isolation** | Isolated within Shell process | Completely separate process |
+| **Auditing** | Detailed logging available | MCP server dependent |
+| **Deployment** | Simple ZIP deployment | MCP server setup required |
+
+**Use Native Tool Packages when:**
+- Internal tools or handling sensitive data
+- Strict access control is required
+- Audit logging is mandatory
+- Network access should be restricted
+
+**Use MCP when:**
+- Using existing MCP servers
+- Integrating with external services
+- Using community-provided tools
+
+### Sandbox Execution Architecture
+
+Tools are executed in a sandboxed environment for security.
+
+**Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Clawleash (Main Process)                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   Kernel    │  │ ToolLoader  │  │   ShellServer       │  │
+│  │  (AI Agent) │  │ (ZIP/DLL)   │  │   (ZeroMQ Router)   │  │
+│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
+│         │                │                     │ IPC           │
+└─────────┼────────────────┼─────────────────────┼─────────────┘
+          │                │                     │
+          │  ┌─────────────┴─────────────────────┘
+          │  │
+          ▼  ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Clawleash.Shell (Sandboxed Process)         │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │           AppContainer (Windows) / Bubblewrap (Linux)    │ │
+│  │  - File system access control                            │ │
+│  │  - Network access control                                │ │
+│  │  - Process execution control                              │ │
+│  │  - Folder policy enforcement                              │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  AssemblyLoadContext (isCollectible: true)               │ │
+│  │  - Tool DLLs loaded in isolated context                  │ │
+│  │  - Can be unloaded when tool is removed                  │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Execution Flow:**
+
+1. **Tool Invocation:**
+   - Kernel → ToolProxy → ShellServer (IPC)
+   - ShellServer → Shell (inside sandbox)
+   - Shell → AssemblyLoadContext → Tool DLL
+   - Results returned in reverse order
+
+2. **Isolation Mechanism:**
+   - Each tool package is loaded in a separate `AssemblyLoadContext`
+   - Unloadable (`isCollectible: true`)
+   - Memory released when tool is removed
+
+3. **Security Boundaries:**
+   - **Process Isolation**: Main ↔ Shell are separate processes
+   - **OS-level Isolation**: AppContainer/Bubblewrap restricts resources
+   - **Folder Policies**: Path-based access control
+
+**AppContainer Capabilities (Windows):**
+
+```json
+{
+  "Sandbox": {
+    "Type": "AppContainer",
+    "AppContainerName": "Clawleash.Sandbox",
+    "Capabilities": "InternetClient, PrivateNetworkClientServer"
+  }
+}
+```
+
+| Capability | Allowed Operations |
+|------------|-------------------|
+| `InternetClient` | Outbound internet connections |
+| `PrivateNetworkClientServer` | Private network connections |
+| None | No network access |
+
+**Folder Policy Control:**
+
+```json
+{
+  "Sandbox": {
+    "FolderPolicies": [
+      {
+        "Path": "C:\\Work",
+        "Access": "ReadWrite",
+        "Execute": "Deny",
+        "DeniedExtensions": [".exe", ".bat", ".ps1"]
+      }
+    ]
+  }
+}
+```
 
 ---
 
