@@ -203,13 +203,18 @@ internal class Program
                 var toolCount = mcpManager.GetAllTools().Count();
                 Console.WriteLine($"MCPツールを {toolCount} 件ロードしました");
 
-                // 各MCPサーバーをプラグインとして登録
+                // 各MCPサーバーのツールを個別のKernelFunctionとして登録
                 foreach (var (serverName, server) in mcpManager.Servers)
                 {
                     if (server.IsConnected && server.Tools.Count > 0)
                     {
-                        var mcpPlugin = new McpServerPlugin(mcpManager, serverName, server.Tools);
-                        kernel.Plugins.AddFromObject(mcpPlugin, $"Mcp_{serverName}");
+                        // 動的に各ツールをKernelFunctionとして生成
+                        var plugin = McpPluginFactory.CreateKernelPlugin(
+                            mcpManager, serverName, server.Tools);
+                        kernel.Plugins.Add(plugin);
+
+                        Console.WriteLine($"  {serverName}: {server.Tools.Count} ツール " +
+                            $"({string.Join(", ", server.Tools.Select(t => t.ToolName))})");
                     }
                 }
             }
