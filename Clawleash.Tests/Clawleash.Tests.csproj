@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Clawleash\Clawleash.csproj" />
+    <ProjectReference Include="..\Clawleash.Interfaces.WebRTC\Clawleash.Interfaces.WebRTC.csproj" />
   </ItemGroup>
 
 </Project>

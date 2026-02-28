@@ -50,4 +50,35 @@ public class WebRtcSettings : ChatInterfaceSettingsBase
     /// DataChannel名
     /// </summary>
     public string DataChannelName { get; set; } = "clawleash-chat";
+
+    /// <summary>
+    /// 最大再接続試行回数
+    /// </summary>
+    public int MaxReconnectAttempts { get; set; } = 5;
+
+    /// <summary>
+    /// ネイティブWebRTCライブラリの使用を試みる
+    /// 無効な場合はシミュレーションモードで動作
+    /// </summary>
+    public bool TryUseNativeClient { get; set; } = true;
+
+    /// <summary>
+    /// ICE候補の収集タイムアウト（ミリ秒）
+    /// </summary>
+    public int IceGatheringTimeoutMs { get; set; } = 10000;
+
+    /// <summary>
+    /// DataChannelの信頼性モード
+    /// </summary>
+    public bool DataChannelReliable { get; set; } = true;
+
+    /// <summary>
+    /// ハートビート間隔（ミリ秒）- 0で無効
+    /// </summary>
+    public int HeartbeatIntervalMs { get; set; } = 30000;
+
+    /// <summary>
+    /// ピア接続アイドルタイムアウト（ミリ秒）
+    /// </summary>
+    public int PeerIdleTimeoutMs { get; set; } = 60000;
 }

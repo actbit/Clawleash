@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text;
-using System.Text.Json;
 using Clawleash.Abstractions.Services;
 using Clawleash.Interfaces.WebRTC.Security;
+using Lucid.Rtc;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 
@@ -11,7 +11,7 @@ namespace Clawleash.Interfaces.WebRTC;
 /// <summary>
 /// WebRTCチャットインターフェース
 /// SignalRシグナリングサーバー経由でWebRTC接続を確立し、DataChannelで通信
-/// 完全実装：ピア発見、SDP交換、ICE候補交換、DataChannel通信
+/// Lucid.Rtc高レベルAPIを使用
 /// </summary>
 public class WebRtcChatInterface : IChatInterface
 {
@@ -21,10 +21,13 @@ public class WebRtcChatInterface : IChatInterface
     private HubConnection? _hubConnection;
     private CancellationTokenSource? _cts;
     private readonly ConcurrentDictionary<string, string> _channelTracking = new();
-    private readonly ConcurrentDictionary<string, PeerConnectionState> _peerConnections = new();
     private bool _disposed;
     private bool _isConnected;
     private string? _localPeerId;
+
+    // Lucid.Rtc high-level API
+    private RtcConnection? _rtcConnection;
+    private readonly ConcurrentDictionary<string, Peer> _peers = new();
 
     // 接続状態
     private int _activeConnections;
@@ -34,16 +37,6 @@ public class WebRtcChatInterface : IChatInterface
     public bool IsConnected => _isConnected && _hubConnection?.State == HubConnectionState.Connected && _activeConnections > 0;
 
     public event EventHandler<ChatMessageReceivedEventArgs>? MessageReceived;
-
-    // WebRTCピア接続状態
-    private class PeerConnectionState
-    {
-        public string PeerId { get; set; } = string.Empty;
-        public string ConnectionId { get; set; } = string.Empty;
-        public bool IsDataChannelReady { get; set; }
-        public DateTime ConnectedAt { get; set; }
-        public string? SessionKey { get; set; }
-    }
 
     public WebRtcChatInterface(
         WebRtcSettings settings,
@@ -66,6 +59,9 @@ public class WebRtcChatInterface : IChatInterface
 
         try
         {
+            // Initialize Lucid.Rtc connection
+            InitializeRtcConnection();
+
             // SignalRハブ接続を構築
             _hubConnection = new HubConnectionBuilder()
                 .WithUrl(_settings.SignalingServerUrl)
@@ -109,13 +105,215 @@ public class WebRtcChatInterface : IChatInterface
             // 既存のピアを取得して接続開始
             await DiscoverAndConnectPeersAsync();
 
-            _logger?.LogInformation("WebRTC interface started. E2EE: {E2ee}",
+            _logger?.LogInformation("WebRTC interface started. E2EE: {E2ee}, Backend: Lucid.Rtc",
                 _settings.EnableE2ee ? "Enabled" : "Disabled");
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Failed to start WebRTC interface");
             throw;
+        }
+    }
+
+    private void InitializeRtcConnection()
+    {
+        var builder = new RtcConnectionBuilder();
+
+        // STUN servers
+        foreach (var stunServer in _settings.StunServers)
+        {
+            builder.WithStunServer(stunServer);
+        }
+
+        // TURN server (optional)
+        if (!string.IsNullOrEmpty(_settings.TurnServerUrl))
+        {
+            builder.WithTurnServer(
+                _settings.TurnServerUrl,
+                _settings.TurnUsername ?? "",
+                _settings.TurnPassword ?? "");
+        }
+
+        // Other settings
+        builder
+            .WithIceConnectionTimeout(_settings.IceConnectionTimeoutMs)
+            .WithDataChannelReliable(_settings.DataChannelReliable);
+
+        _rtcConnection = builder.Build();
+
+        // Register event handlers with method chaining
+        _rtcConnection
+            .On<Lucid.Rtc.PeerConnectedEvent>(e => OnPeerConnected(e.PeerId, e.Peer))
+            .On<Lucid.Rtc.PeerDisconnectedEvent>(e => OnPeerDisconnected(e.PeerId))
+            .On<Lucid.Rtc.MessageReceivedEvent>(e => HandleMessage(e.PeerId, e.Data))
+            .On<Lucid.Rtc.IceCandidateEvent>(e => SendIceCandidate(e.PeerId, e.Candidate))
+            .On<Lucid.Rtc.OfferReadyEvent>(e => SendOffer(e.PeerId, e.Sdp))
+            .On<Lucid.Rtc.AnswerReadyEvent>(e => SendAnswer(e.PeerId, e.Sdp))
+            .On<Lucid.Rtc.DataChannelOpenEvent>(e => OnDataChannelOpen(e.PeerId, e.Peer))
+            .On<Lucid.Rtc.DataChannelClosedEvent>(e => OnDataChannelClosed(e.PeerId, e.Peer))
+            .On<Lucid.Rtc.ErrorEvent>(e => _logger?.LogError("Lucid.Rtc error: {Message}", e.Message));
+
+        _logger?.LogInformation("Lucid.Rtc connection initialized");
+    }
+
+    private void OnPeerConnected(string peerId, Peer peer)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                lock (_connectionLock)
+                {
+                    _activeConnections++;
+                }
+
+                _peers[peerId] = peer;
+
+                _logger?.LogInformation("Peer connected: {PeerId}. Active connections: {Count}",
+                    peerId, _activeConnections);
+
+                // E2EE鍵交換を開始
+                if (_settings.EnableE2ee)
+                {
+                    await StartE2eeKeyExchangeAsync(peerId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Error handling peer connected event for {PeerId}", peerId);
+            }
+        });
+    }
+
+    private void OnPeerDisconnected(string peerId)
+    {
+        lock (_connectionLock)
+        {
+            if (_activeConnections > 0)
+                _activeConnections--;
+        }
+
+        _peers.TryRemove(peerId, out _);
+
+        _logger?.LogInformation("Peer disconnected: {PeerId}. Active connections: {Count}",
+            peerId, _activeConnections);
+    }
+
+    private void HandleMessage(string peerId, byte[] data)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await HandleDataChannelMessageAsync(peerId, data);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Error handling message from {PeerId}", peerId);
+            }
+        });
+    }
+
+    private void SendIceCandidate(string peerId, IceCandidate candidate)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await SendIceCandidateToSignalingAsync(peerId, candidate);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Error sending ICE candidate for {PeerId}", peerId);
+            }
+        });
+    }
+
+    private void SendOffer(string peerId, string sdp)
+    {
+        _ = Task.Run(async () =>
+        {
+            if (_hubConnection == null) return;
+
+            try
+            {
+                await _hubConnection.InvokeAsync("SendOffer", peerId, sdp);
+                _logger?.LogDebug("Sent offer to {PeerId}", peerId);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Error sending offer for {PeerId}", peerId);
+            }
+        });
+    }
+
+    private void SendAnswer(string peerId, string sdp)
+    {
+        _ = Task.Run(async () =>
+        {
+            if (_hubConnection == null) return;
+
+            try
+            {
+                await _hubConnection.InvokeAsync("SendAnswer", peerId, sdp);
+                _logger?.LogDebug("Sent answer to {PeerId}", peerId);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Error sending answer for {PeerId}", peerId);
+            }
+        });
+    }
+
+    private void OnDataChannelOpen(string peerId, Peer peer)
+    {
+        _logger?.LogInformation("DataChannel opened with peer {PeerId}", peerId);
+
+        lock (_connectionLock)
+        {
+            _activeConnections++;
+        }
+
+        if (_settings.EnableE2ee)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await StartE2eeKeyExchangeAsync(peerId);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Error starting E2EE key exchange with {PeerId}", peerId);
+                }
+            });
+        }
+    }
+
+    private void OnDataChannelClosed(string peerId, Peer peer)
+    {
+        _logger?.LogInformation("DataChannel closed with peer {PeerId}", peerId);
+
+        lock (_connectionLock)
+        {
+            if (_activeConnections > 0)
+                _activeConnections--;
+        }
+    }
+
+    private async Task SendIceCandidateToSignalingAsync(string peerId, IceCandidate candidate)
+    {
+        if (_hubConnection == null) return;
+
+        try
+        {
+            await _hubConnection.InvokeAsync("SendIceCandidate",
+                peerId, candidate.Candidate, candidate.SdpMid, candidate.SdpMlineIndex);
+            _logger?.LogDebug("Sent ICE candidate to signaling server for peer {PeerId}", peerId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to send ICE candidate for peer {PeerId}", peerId);
         }
     }
 
@@ -161,27 +359,21 @@ public class WebRtcChatInterface : IChatInterface
         });
 
         // ICE候補受信
-        _hubConnection!.On<IceCandidateEvent>("ice-candidate", async data =>
+        _hubConnection!.On<SignalRIceCandidateEvent>("ice-candidate", async data =>
         {
             await HandleIceCandidateAsync(data.FromPeerId, data.Candidate, data.SdpMid, data.SdpMlineIndex);
         });
 
         // ピア接続完了
-        _hubConnection!.On<PeerConnectedEvent>("peer-connected", async data =>
+        _hubConnection!.On<PeerConnectedSignalREvent>("peer-connected", async data =>
         {
-            await OnPeerConnectedAsync(data.PeerId);
+            await OnPeerConnectedSignalRAsync(data.PeerId);
         });
 
         // ピア切断
-        _hubConnection!.On<PeerDisconnectedEvent>("peer-disconnected", data =>
+        _hubConnection!.On<PeerDisconnectedSignalREvent>("peer-disconnected", data =>
         {
-            OnPeerDisconnected(data.PeerId);
-        });
-
-        // DataChannelメッセージ受信
-        _hubConnection!.On<DataChannelMessageEvent>("datachannel-message", async data =>
-        {
-            await HandleDataChannelMessageAsync(data.FromPeerId, data.Payload);
+            OnPeerDisconnectedSignalR(data.PeerId);
         });
 
         // E2EE鍵交換
@@ -203,7 +395,8 @@ public class WebRtcChatInterface : IChatInterface
                 capabilities = new Dictionary<string, object>
                 {
                     ["e2ee"] = _settings.EnableE2ee,
-                    ["version"] = "1.0"
+                    ["version"] = "1.0",
+                    ["backend"] = "lucid.rtc"
                 }
             });
 
@@ -237,59 +430,73 @@ public class WebRtcChatInterface : IChatInterface
 
     private async Task InitiatePeerConnectionAsync(string peerId)
     {
-        if (_hubConnection == null || string.IsNullOrEmpty(_localPeerId)) return;
+        if (_rtcConnection == null || string.IsNullOrEmpty(_localPeerId)) return;
 
         _logger?.LogInformation("Initiating connection to peer: {PeerId}", peerId);
 
-        // Offer SDPを作成（シミュレーション - 実際のWebRTCではRTCPeerConnectionを使用）
-        var offerSdp = GenerateOfferSdp();
-
-        // Offerを送信
-        await _hubConnection.InvokeAsync("SendOffer", peerId, offerSdp);
-
-        // ピア接続状態を初期化
-        _peerConnections[peerId] = new PeerConnectionState
+        try
         {
-            PeerId = peerId,
-            IsDataChannelReady = false,
-            ConnectedAt = DateTime.UtcNow
-        };
+            // Lucid.Rtc高レベルAPIでピア作成
+            var peer = await _rtcConnection.CreatePeerAsync(peerId);
+            _peers[peerId] = peer;
+
+            // Offerは自動的に生成され、OfferReadyEventで送信される
+            _logger?.LogDebug("Created peer for {PeerId}, waiting for offer", peerId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to initiate connection to {PeerId}", peerId);
+        }
     }
 
     private async Task HandleOfferAsync(string fromPeerId, string sdp)
     {
-        if (_hubConnection == null) return;
+        if (_rtcConnection == null) return;
 
         _logger?.LogDebug("Received offer from {PeerId}", fromPeerId);
 
-        // Answer SDPを作成（シミュレーション）
-        var answerSdp = GenerateAnswerSdp(sdp);
-
-        // Answerを送信
-        await _hubConnection.InvokeAsync("SendAnswer", fromPeerId, answerSdp);
-
-        // ピア接続状態を更新
-        _peerConnections[fromPeerId] = new PeerConnectionState
+        try
         {
-            PeerId = fromPeerId,
-            IsDataChannelReady = true,
-            ConnectedAt = DateTime.UtcNow
-        };
+            // 既存のピアを取得、または新規作成
+            Peer peer;
+            if (_peers.TryGetValue(fromPeerId, out var existingPeer))
+            {
+                peer = existingPeer;
+            }
+            else
+            {
+                peer = await _rtcConnection.CreatePeerAsync(fromPeerId);
+                _peers[fromPeerId] = peer;
+            }
 
-        // 接続完了として処理
-        await OnPeerConnectedAsync(fromPeerId);
+            // Offerを設定（Answerは自動的に生成され、AnswerReadyEventで送信される）
+            peer.SetRemoteOffer(sdp);
+            _logger?.LogDebug("Set remote offer for {PeerId}", fromPeerId);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to handle offer from {PeerId}", fromPeerId);
+        }
     }
 
-    private async Task HandleAnswerAsync(string fromPeerId, string sdp)
+    private Task HandleAnswerAsync(string fromPeerId, string sdp)
     {
         _logger?.LogDebug("Received answer from {PeerId}", fromPeerId);
 
-        // Answerを処理して接続完了
-        if (_peerConnections.TryGetValue(fromPeerId, out var state))
+        if (_peers.TryGetValue(fromPeerId, out var peer))
         {
-            state.IsDataChannelReady = true;
-            await OnPeerConnectedAsync(fromPeerId);
+            try
+            {
+                peer.SetRemoteAnswer(sdp);
+                _logger?.LogDebug("Set remote answer for {PeerId}", fromPeerId);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to set remote answer for {PeerId}", fromPeerId);
+            }
         }
+
+        return Task.CompletedTask;
     }
 
     private Task HandleIceCandidateAsync(string fromPeerId, string candidate, string sdpMid, int sdpMlineIndex)
@@ -297,28 +504,41 @@ public class WebRtcChatInterface : IChatInterface
         _logger?.LogDebug("Received ICE candidate from {PeerId}: {SdpMid}:{Index}",
             fromPeerId, sdpMid, sdpMlineIndex);
 
-        // ICE候補を処理（実際のWebRTC実装ではRTCPeerConnectionに追加）
+        if (_peers.TryGetValue(fromPeerId, out var peer))
+        {
+            try
+            {
+                var iceCandidate = new IceCandidate
+                {
+                    Candidate = candidate,
+                    SdpMid = sdpMid,
+                    SdpMlineIndex = sdpMlineIndex
+                };
+                peer.AddIceCandidate(iceCandidate);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to add ICE candidate for {PeerId}", fromPeerId);
+            }
+        }
+
         return Task.CompletedTask;
     }
 
-    private async Task OnPeerConnectedAsync(string peerId)
+    private Task OnPeerConnectedSignalRAsync(string peerId)
     {
         lock (_connectionLock)
         {
             _activeConnections++;
         }
 
-        _logger?.LogInformation("Peer connected: {PeerId}. Active connections: {Count}",
+        _logger?.LogInformation("Peer connected (SignalR): {PeerId}. Active connections: {Count}",
             peerId, _activeConnections);
 
-        // E2EE鍵交換を開始
-        if (_settings.EnableE2ee)
-        {
-            await StartE2eeKeyExchangeAsync(peerId);
-        }
+        return Task.CompletedTask;
     }
 
-    private void OnPeerDisconnected(string peerId)
+    private void OnPeerDisconnectedSignalR(string peerId)
     {
         lock (_connectionLock)
         {
@@ -326,8 +546,9 @@ public class WebRtcChatInterface : IChatInterface
                 _activeConnections--;
         }
 
-        _peerConnections.TryRemove(peerId, out _);
-        _logger?.LogInformation("Peer disconnected: {PeerId}. Active connections: {Count}",
+        _peers.TryRemove(peerId, out _);
+
+        _logger?.LogInformation("Peer disconnected (SignalR): {PeerId}. Active connections: {Count}",
             peerId, _activeConnections);
     }
 
@@ -337,17 +558,30 @@ public class WebRtcChatInterface : IChatInterface
         {
             _activeConnections = 0;
         }
-        _peerConnections.Clear();
+
+        // Close all peers
+        foreach (var kvp in _peers)
+        {
+            try
+            {
+                kvp.Value.CloseAsync().Wait(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Error closing peer {PeerId}", kvp.Key);
+            }
+        }
+
+        _peers.Clear();
     }
 
-    private async Task HandleDataChannelMessageAsync(string fromPeerId, string payloadBase64)
+    private async Task HandleDataChannelMessageAsync(string fromPeerId, byte[] payload)
     {
-        if (string.IsNullOrEmpty(payloadBase64))
+        if (payload == null || payload.Length == 0)
             return;
 
         try
         {
-            var payload = Convert.FromBase64String(payloadBase64);
             string content;
 
             if (_settings.EnableE2ee && _e2eeProvider.IsEncrypted)
@@ -364,7 +598,7 @@ public class WebRtcChatInterface : IChatInterface
             {
                 MessageId = messageId,
                 SenderId = fromPeerId,
-                SenderName = $"Peer-{fromPeerId[..8]}",
+                SenderName = $"Peer-{fromPeerId[..Math.Min(8, fromPeerId.Length)]}",
                 Content = content,
                 ChannelId = "webrtc",
                 Timestamp = DateTime.UtcNow,
@@ -373,7 +607,8 @@ public class WebRtcChatInterface : IChatInterface
                 Metadata = new Dictionary<string, object>
                 {
                     ["peerId"] = fromPeerId,
-                    ["encrypted"] = _settings.EnableE2ee && _e2eeProvider.IsEncrypted
+                    ["encrypted"] = _settings.EnableE2ee && _e2eeProvider.IsEncrypted,
+                    ["backend"] = "lucid.rtc"
                 }
             };
 
@@ -394,8 +629,6 @@ public class WebRtcChatInterface : IChatInterface
         {
             var result = await _e2eeProvider.StartKeyExchangeAsync(_cts?.Token ?? CancellationToken.None);
 
-            // ターゲットピアを指定して鍵交換
-            // SignalingHubには特定ピアへの送信メソッドが必要
             await _hubConnection.InvokeAsync("E2eeKeyExchange", peerId, result.SessionId, Convert.ToBase64String(result.PublicKey));
 
             _logger?.LogDebug("E2EE key exchange initiated with {PeerId}", peerId);
@@ -422,7 +655,6 @@ public class WebRtcChatInterface : IChatInterface
 
             _logger?.LogInformation("E2EE key exchange completed with {PeerId}", fromPeerId);
 
-            // 応答として自分の公開鍵を送信（まだ暗号化されていない場合）
             if (!_e2eeProvider.IsEncrypted)
             {
                 await StartE2eeKeyExchangeAsync(fromPeerId);
@@ -458,7 +690,7 @@ public class WebRtcChatInterface : IChatInterface
     public async Task SendMessageAsync(string message, string? replyToMessageId = null,
         CancellationToken cancellationToken = default)
     {
-        if (_hubConnection == null || string.IsNullOrEmpty(_localPeerId))
+        if (_rtcConnection == null || string.IsNullOrEmpty(_localPeerId))
         {
             _logger?.LogWarning("WebRTC not connected");
             return;
@@ -475,27 +707,33 @@ public class WebRtcChatInterface : IChatInterface
             payload = Encoding.UTF8.GetBytes(message);
         }
 
-        var payloadBase64 = Convert.ToBase64String(payload);
-
-        // 特定のピアに送信、またはブロードキャスト
+        // 特定のピアに送信（返信の場合）
         if (!string.IsNullOrEmpty(replyToMessageId) && _channelTracking.TryGetValue(replyToMessageId, out var targetPeerId))
         {
-            // 特定のピアに返信
-            await _hubConnection.InvokeAsync("SendDataChannelMessage", targetPeerId, payloadBase64, cancellationToken);
-        }
-        else
-        {
-            // すべての接続ピアにブロードキャスト
-            foreach (var peerId in _peerConnections.Keys)
+            if (_peers.TryGetValue(targetPeerId, out var peer))
             {
                 try
                 {
-                    await _hubConnection.InvokeAsync("SendDataChannelMessage", peerId, payloadBase64, cancellationToken);
+                    peer.Send(payload);
+                    _logger?.LogDebug("Sent message to peer {PeerId}", targetPeerId);
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogWarning(ex, "Failed to send message to peer {PeerId}", peerId);
+                    _logger?.LogWarning(ex, "Failed to send message to peer {PeerId}", targetPeerId);
                 }
+            }
+        }
+        else
+        {
+            // 全ピアにブロードキャスト
+            try
+            {
+                _rtcConnection.Broadcast(payload);
+                _logger?.LogDebug("Broadcast message to all peers");
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to broadcast message");
             }
         }
     }
@@ -512,29 +750,15 @@ public class WebRtcChatInterface : IChatInterface
 
         _disposed = true;
         await StopAsync();
+
+        if (_rtcConnection != null)
+        {
+            await _rtcConnection.DisposeAsync();
+            _rtcConnection = null;
+        }
+
         _hubConnection?.DisposeAsync();
         _cts?.Dispose();
-    }
-
-    // SDP生成（シミュレーション - 実際のWebRTC実装では本物のSDPを使用）
-    private string GenerateOfferSdp()
-    {
-        return $"v=0\r\n" +
-               $"o=- {Guid.NewGuid():N} 2 IN IP4 127.0.0.1\r\n" +
-               $"s=Clawleash WebRTC Offer\r\n" +
-               $"t=0 0\r\n" +
-               $"m=application 1 DTLS/SCTP 5000\r\n" +
-               $"c=IN IP4 0.0.0.0\r\n";
-    }
-
-    private string GenerateAnswerSdp(string offerSdp)
-    {
-        return $"v=0\r\n" +
-               $"o=- {Guid.NewGuid():N} 2 IN IP4 127.0.0.1\r\n" +
-               $"s=Clawleash WebRTC Answer\r\n" +
-               $"t=0 0\r\n" +
-               $"m=application 1 DTLS/SCTP 5000\r\n" +
-               $"c=IN IP4 0.0.0.0\r\n";
     }
 }
 
@@ -626,7 +850,7 @@ internal class AnswerEvent
     public string Sdp { get; set; } = string.Empty;
 }
 
-internal class IceCandidateEvent
+internal class SignalRIceCandidateEvent
 {
     public string FromPeerId { get; set; } = string.Empty;
     public string Candidate { get; set; } = string.Empty;
@@ -634,21 +858,15 @@ internal class IceCandidateEvent
     public int SdpMlineIndex { get; set; }
 }
 
-internal class PeerConnectedEvent
+internal class PeerConnectedSignalREvent
 {
     public string PeerId { get; set; } = string.Empty;
     public string? RemotePeerId { get; set; }
 }
 
-internal class PeerDisconnectedEvent
+internal class PeerDisconnectedSignalREvent
 {
     public string PeerId { get; set; } = string.Empty;
-}
-
-internal class DataChannelMessageEvent
-{
-    public string FromPeerId { get; set; } = string.Empty;
-    public string Payload { get; set; } = string.Empty;
 }
 
 internal class E2eeKeyExchangeEvent
