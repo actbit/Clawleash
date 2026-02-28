@@ -615,17 +615,263 @@ See [Clawleash.Abstractions/README.md](Clawleash.Abstractions/README.md) for det
 
 ## IPC Communication
 
+Communication between Main and Shell processes uses ZeroMQ + MessagePack.
+
+### Communication Specification
+
 | Item | Specification |
 |------|---------------|
-| Protocol | ZeroMQ (Router/Dealer) |
-| Serialization | MessagePack |
-| Direction | Main (Server) ← Shell (Client) |
+| Library | NetMQ (ZeroMQ .NET implementation) |
+| Pattern | Router/Dealer |
+| Serialization | MessagePack (Union attribute for polymorphism) |
+| Transport | TCP (localhost) |
+| Direction | Main (Router/Server) ↔ Shell (Dealer/Client) |
 
-**Message Types:**
-- `ShellExecuteRequest/Response` - Command execution
-- `ToolInvokeRequest/Response` - Tool invocation
-- `ShellInitializeRequest/Response` - Initialization
-- `ShellPingRequest/Response` - Health check
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Main Process                              │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              RouterSocket (Server)                       │ │
+│  │  - Bind to random port                                   │ │
+│  │  - Multiple client connections supported                 │ │
+│  │  - Client identification via Identity                    │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                    ZeroMQ (TCP)
+                            │
+┌─────────────────────────────────────────────────────────────┐
+│                   Shell Process (Sandboxed)                  │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              DealerSocket (Client)                       │ │
+│  │  - Dynamically assigned Identity                         │ │
+│  │  - Async request/response                                │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Connection Flow
+
+```
+Main                                Shell
+  │                                   │
+  │  1. RouterSocket.BindRandomPort  │
+  │     (e.g., tcp://127.0.0.1:5555) │
+  │                                   │
+  │                     2. Process start --server "tcp://..."
+  │                                   │
+  │                     3. DealerSocket.Connect()
+  │                                   │
+  │  ◄─────── ShellReadyMessage ───── │
+  │     (ProcessId, Runtime, OS)     │
+  │                                   │
+  │  ──── ShellInitializeRequest ────►│
+  │     (AllowedCommands, Paths)     │
+  │                                   │
+  │  ◄─── ShellInitializeResponse ───│
+  │     (Success, Version)           │
+  │                                   │
+  │         Ready                     │
+```
+
+### Message Types
+
+#### Base Message (Common to All Messages)
+
+```csharp
+public abstract class ShellMessage
+{
+    public string MessageId { get; set; }      // Unique identifier
+    public DateTime Timestamp { get; set; }    // UTC timestamp
+}
+```
+
+#### 1. ShellReadyMessage (Shell → Main)
+
+Ready notification sent on connection completion.
+
+```csharp
+public class ShellReadyMessage : ShellMessage
+{
+    public int ProcessId { get; set; }        // Shell process ID
+    public string Runtime { get; set; }       // .NET runtime info
+    public string OS { get; set; }            // OS information
+}
+```
+
+#### 2. ShellInitializeRequest/Response (Main ↔ Shell)
+
+Initialize the Shell execution environment.
+
+**Request:**
+```csharp
+public class ShellInitializeRequest : ShellMessage
+{
+    public string[] AllowedCommands { get; set; }    // Permitted commands
+    public string[] AllowedPaths { get; set; }       // Read/write allowed paths
+    public string[] ReadOnlyPaths { get; set; }      // Read-only paths
+    public ShellLanguageMode LanguageMode { get; set; } // ConstrainedLanguage
+}
+```
+
+**Response:**
+```csharp
+public class ShellInitializeResponse : ShellMessage
+{
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+    public string Version { get; set; }
+    public string Runtime { get; set; }
+}
+```
+
+#### 3. ShellExecuteRequest/Response (Main ↔ Shell)
+
+Execute PowerShell commands.
+
+**Request:**
+```csharp
+public class ShellExecuteRequest : ShellMessage
+{
+    public string Command { get; set; }              // Command to execute
+    public Dictionary<string, object?> Parameters { get; set; }
+    public string? WorkingDirectory { get; set; }
+    public int TimeoutMs { get; set; } = 30000;
+    public ShellExecutionMode Mode { get; set; }
+}
+```
+
+**Response:**
+```csharp
+public class ShellExecuteResponse : ShellMessage
+{
+    public string RequestId { get; set; }
+    public bool Success { get; set; }
+    public string Output { get; set; }              // Standard output
+    public string? Error { get; set; }              // Error message
+    public int ExitCode { get; set; }
+    public Dictionary<string, object?> Metadata { get; set; }
+}
+```
+
+#### 4. ToolInvokeRequest/Response (Main ↔ Shell)
+
+Invoke methods from tool packages.
+
+**Request:**
+```csharp
+public class ToolInvokeRequest : ShellMessage
+{
+    public string ToolName { get; set; }            // Tool name
+    public string MethodName { get; set; }          // Method name
+    public object?[] Arguments { get; set; }        // Arguments
+}
+```
+
+**Response:**
+```csharp
+public class ToolInvokeResponse : ShellMessage
+{
+    public string RequestId { get; set; }
+    public bool Success { get; set; }
+    public object? Result { get; set; }             // Return value
+    public string? Error { get; set; }
+}
+```
+
+#### 5. ShellPingRequest/Response (Main ↔ Shell)
+
+Health monitoring and latency measurement.
+
+**Request:**
+```csharp
+public class ShellPingRequest : ShellMessage
+{
+    public string Payload { get; set; } = "ping";
+}
+```
+
+**Response:**
+```csharp
+public class ShellPingResponse : ShellMessage
+{
+    public string Payload { get; set; } = "pong";
+    public long ProcessingTimeMs { get; set; }      // Processing time
+}
+```
+
+#### 6. ShellShutdownRequest/Response (Main ↔ Shell)
+
+Shutdown the Shell process.
+
+**Request:**
+```csharp
+public class ShellShutdownRequest : ShellMessage
+{
+    public bool Force { get; set; }                 // Force shutdown flag
+}
+```
+
+**Response:**
+```csharp
+public class ShellShutdownResponse : ShellMessage
+{
+    public bool Success { get; set; }
+}
+```
+
+### MessagePack Serialization
+
+```csharp
+// Union attribute for polymorphic deserialization
+[MessagePackObject]
+[Union(0, typeof(ShellExecuteRequest))]
+[Union(1, typeof(ShellExecuteResponse))]
+[Union(2, typeof(ShellInitializeRequest))]
+// ...
+public abstract class ShellMessage { ... }
+
+// Serialize
+var data = MessagePackSerializer.Serialize(request);
+
+// Deserialize
+var message = MessagePackSerializer.Deserialize<ShellMessage>(data);
+```
+
+### Error Handling
+
+```csharp
+try
+{
+    var response = await shellServer.ExecuteAsync(request);
+    if (!response.Success)
+    {
+        // Command execution failed
+        Console.WriteLine($"Error: {response.Error}");
+    }
+}
+catch (TimeoutException)
+{
+    // No response from Shell
+}
+catch (InvalidOperationException)
+{
+    // Shell not connected
+}
+```
+
+### Timeout Configuration
+
+```csharp
+var options = new ShellServerOptions
+{
+    StartTimeoutMs = 10000,           // Startup timeout
+    CommunicationTimeoutMs = 30000,   // Communication timeout
+    Verbose = true                    // Verbose logging
+};
+```
 
 ---
 
