@@ -1,16 +1,16 @@
 # Clawleash.Shell
 
-Clawleash のサンドボックス実行プロセス。ZeroMQ + MessagePack による IPC でメインアプリケーションと通信し、制約付き PowerShell 環境でコマンドを実行します。
+Clawleash's sandbox execution process. Communicates with the main application via IPC using ZeroMQ + MessagePack, executing commands in a constrained PowerShell environment.
 
-## 概要
+## Overview
 
-Clawleash.Shell は分離されたプロセスとして動作し、以下の役割を持ちます：
+Clawleash.Shell operates as an isolated process with the following responsibilities:
 
-- **IPC クライアント**: ZeroMQ (DealerSocket) でメインアプリに接続
-- **PowerShell 実行**: 制約付き PowerShell Runspace でコマンド実行
-- **サンドボックス**: AppContainer (Windows) / Bubblewrap (Linux) で分離実行
+- **IPC Client**: Connects to main app via ZeroMQ (DealerSocket)
+- **PowerShell Execution**: Executes commands in constrained PowerShell Runspace
+- **Sandbox**: Runs isolated in AppContainer (Windows) / Bubblewrap (Linux)
 
-## アーキテクチャ
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -41,73 +41,73 @@ Clawleash.Shell は分離されたプロセスとして動作し、以下の役�
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 使用方法
+## Usage
 
-### 起動
+### Starting
 
-Clawleash.Shell は通常、メインアプリケーションから自動的に起動されます：
+Clawleash.Shell is typically started automatically from the main application:
 
 ```bash
-# 手動起動（デバッグ用）
+# Manual start (for debugging)
 Clawleash.Shell --server tcp://localhost:5555
 
-# 詳細ログ有効
+# Verbose logging enabled
 Clawleash.Shell --server tcp://localhost:5555 --verbose
 ```
 
-### コマンドライン引数
+### Command Line Arguments
 
-| 引数 | 短縮 | 説明 |
+| Argument | Short | Description |
 |------|------|------|
-| `--server <address>` | `-s` | ZeroMQ サーバーアドレス (必須) |
-| `--verbose` | `-v` | 詳細ログ出力 |
+| `--server <address>` | `-s` | ZeroMQ server address (required) |
+| `--verbose` | `-v` | Verbose logging output |
 
-## IPC プロトコル
+## IPC Protocol
 
-### 通信仕様
+### Communication Specification
 
-| 項目 | 仕様 |
-|------|------|
-| プロトコル | ZeroMQ (Router/Dealer) |
-| シリアライズ | MessagePack |
-| 方向 | Main (Server) ← Shell (Client) |
+| Item | Specification |
+|------|---------------|
+| Protocol | ZeroMQ (Router/Dealer) |
+| Serialization | MessagePack |
+| Direction | Main (Server) ← Shell (Client) |
 
-### メッセージ種別
+### Message Types
 
-| メッセージ | 方向 | 説明 |
+| Message | Direction | Description |
 |-----------|------|------|
-| `ShellInitializeRequest` | S → M | 初期化要求 |
-| `ShellInitializeResponse` | M → S | 初期化応答 |
-| `ShellExecuteRequest` | M → S | コマンド実行要求 |
-| `ShellExecuteResponse` | S → M | 実行結果 |
-| `ToolInvokeRequest` | M → S | ツール呼び出し要求 |
-| `ToolInvokeResponse` | S → M | ツール実行結果 |
-| `ShellPingRequest` | M → S | 死活監視 |
-| `ShellPingResponse` | S → M | 応答 |
+| `ShellInitializeRequest` | S → M | Initialization request |
+| `ShellInitializeResponse` | M → S | Initialization response |
+| `ShellExecuteRequest` | M → S | Command execution request |
+| `ShellExecuteResponse` | S → M | Execution result |
+| `ToolInvokeRequest` | M → S | Tool invocation request |
+| `ToolInvokeResponse` | S → M | Tool execution result |
+| `ShellPingRequest` | M → S | Health check |
+| `ShellPingResponse` | S → M | Response |
 
-## PowerShell 制約
+## PowerShell Constraints
 
-### ConstrainedLanguage モード
+### ConstrainedLanguage Mode
 
-デフォルトで ConstrainedLanguage モードで動作：
+Operates in ConstrainedLanguage mode by default:
 
-- **許可**: 基本的なコマンド、パイプライン、変数
-- **禁止**: .NET メソッド呼び出し、Add-Type、スクリプトブロック
+- **Allowed**: Basic commands, pipelines, variables
+- **Prohibited**: .NET method calls, Add-Type, script blocks
 
-### コマンドホワイトリスト
+### Command Whitelist
 
-許可されたコマンドのみ実行可能：
+Only allowed commands can be executed:
 
 ```powershell
-# 許可されるコマンド例
+# Example allowed commands
 Get-Content, Set-Content, Get-ChildItem
 New-Item, Remove-Item, Copy-Item, Move-Item
 Write-Output, Write-Error
 ```
 
-### パス制限
+### Path Restrictions
 
-フォルダーポリシーに基づくアクセス制御：
+Access control based on folder policies:
 
 ```json
 {
@@ -126,75 +126,74 @@ Write-Output, Write-Error
 }
 ```
 
-## サンドボックス
+## Sandbox
 
 ### Windows (AppContainer)
 
-- ケーパビリティベースのアクセス制御
-- ファイルシステム、ネットワーク、レジストリの分離
-- 低い整合性レベルで実行
+- Capability-based access control
+- File system, network, registry isolation
+- Runs at low integrity level
 
 ### Linux (Bubblewrap)
 
-- 名前空間分離 (PID, Network, Mount, User)
-- cgroups によるリソース制限
-- seccomp フィルタ
+- Namespace isolation (PID, Network, Mount, User)
+- Resource limits via cgroups
+- seccomp filter
 
-## プロジェクト構成
+## Project Structure
 
 ```
 Clawleash.Shell/
-├── Program.cs                 # エントリーポイント
+├── Program.cs                 # Entry point
 ├── IPC/
-│   └── IpcClient.cs          # ZeroMQ クライアント
+│   └── IpcClient.cs          # ZeroMQ client
 ├── Hosting/
-│   └── ConstrainedRunspaceHost.cs  # PowerShell ホスト
+│   └── ConstrainedRunspaceHost.cs  # PowerShell host
 └── Cmdlets/
-    └── ...                   # カスタムコマンドレット
+    └── ...                   # Custom cmdlets
 ```
 
-## トラブルシューティング
+## Troubleshooting
 
-### "サーバーアドレスが指定されていません"
+### "Server address not specified"
 
-`--server` 引数を指定してください：
+Specify the `--server` argument:
 
 ```bash
 Clawleash.Shell --server tcp://localhost:5555
 ```
 
-### "Main アプリへの接続に失敗しました"
+### "Failed to connect to Main app"
 
-1. メインアプリケーションが起動しているか確認
-2. サーバーアドレスが正しいか確認
-3. ファイアウォール設定を確認
+1. Verify main application is running
+2. Verify server address is correct
+3. Check firewall settings
 
-### PowerShell コマンドが失敗する
+### PowerShell Command Fails
 
-1. コマンドがホワイトリストに含まれているか確認
-2. パスがフォルダーポリシーで許可されているか確認
-3. ConstrainedLanguage モードの制限を確認
+1. Verify command is in whitelist
+2. Verify path is allowed by folder policies
+3. Check ConstrainedLanguage mode restrictions
 
-## ビルド
+## Build
 
 ```bash
 cd Clawleash.Shell
 dotnet build
 ```
 
-## 依存関係
+## Dependencies
 
 - NetMQ (ZeroMQ)
 - MessagePack
 - PowerShell SDK
 - Clawleash.Contracts
 
-## 関連プロジェクト
+## Related Projects
 
-- [Clawleash](../README.md) - メインアプリケーション
-- [Clawleash.Contracts](../Clawleash.Contracts) - IPC メッセージ定義
-- [Clawleash.Abstractions](../Clawleash.Abstractions/README.md) - 共有インターフェース
+- [Clawleash](../README-en.md) - Main application
+- [Clawleash.Contracts](../Clawleash.Contracts) - IPC message definitions
 
-## ライセンス
+## License
 
 MIT

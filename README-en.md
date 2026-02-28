@@ -595,13 +595,13 @@ You can create and add your own chat interfaces.
 2. Implement `IChatInterface`
 3. Build and place in `%LocalAppData%\Clawleash\Interfaces\`
 
-See [Clawleash.Abstractions/README.md](Clawleash.Abstractions/README.md) for detailed development guide.
+See [Clawleash.Abstractions](Clawleash.Abstractions/README-en.md) for detailed development guide.
 
 **Example Implementations:**
-- [Discord](Clawleash.Interfaces.Discord) - Discord Bot
-- [Slack](Clawleash.Interfaces.Slack) - Slack Bot
-- [WebSocket](Clawleash.Interfaces.WebSocket) - WebSocket (E2EE)
-- [WebRTC](Clawleash.Interfaces.WebRTC) - WebRTC (E2EE)
+- [Discord](Clawleash.Interfaces.Discord/README-en.md) - Discord Bot
+- [Slack](Clawleash.Interfaces.Slack/README-en.md) - Slack Bot
+- [WebSocket](Clawleash.Interfaces.WebSocket/README-en.md) - WebSocket (E2EE)
+- [WebRTC](Clawleash.Interfaces.WebRTC/README-en.md) - WebRTC (E2EE)
 
 ### Adding Skills
 

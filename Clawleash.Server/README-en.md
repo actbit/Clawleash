@@ -1,16 +1,16 @@
 # Clawleash.Server
 
-Clawleash の SignalR サーバーコンポーネント。WebSocket および WebRTC クライアントとのリアルタイム通信を提供し、E2EE（エンドツーエンド暗号化）に対応しています。
+Clawleash's SignalR server component. Provides real-time communication with WebSocket and WebRTC clients, supporting E2EE (End-to-End Encryption).
 
-## 機能
+## Features
 
-- **SignalR Hub**: リアルタイム双方向通信
-- **ChatHub**: WebSocket クライアント用チャットハブ（E2EE 対応）
-- **SignalingHub**: WebRTC シグナリングサーバー
-- **E2EE 鍵管理**: X25519 鍵交換・チャンネル鍵配布
-- **Svelte クライアント配信**: 静的ファイルとして SPA を配信
+- **SignalR Hub**: Real-time bidirectional communication
+- **ChatHub**: Chat hub for WebSocket clients (E2EE support)
+- **SignalingHub**: WebRTC signaling server
+- **E2EE Key Management**: X25519 key exchange and channel key distribution
+- **Svelte Client Delivery**: Serves SPA as static files
 
-## アーキテクチャ
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -18,15 +18,15 @@ Clawleash の SignalR サーバーコンポーネント。WebSocket および We
 │  ┌─────────────────────┐  ┌─────────────────────────────┐   │
 │  │     ChatHub         │  │     SignalingHub            │   │
 │  │  (/chat)            │  │  (/signaling)               │   │
-│  │  - E2EE 対応        │  │  - SDP/ICE 候補交換         │   │
-│  │  - チャンネル管理    │  │  - ピア接続管理             │   │
+│  │  - E2EE Support     │  │  - SDP/ICE candidate exchange│   │
+│  │  - Channel Mgmt     │  │  - Peer connection mgmt     │   │
 │  └─────────────────────┘  └─────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │     Security                                             │ │
 │  │  ┌───────────────────┐  ┌─────────────────────────────┐  │ │
 │  │  │ KeyManager        │  │ E2eeMiddleware              │  │ │
-│  │  │ - 鍵ペア生成       │  │ - チャンネル鍵管理          │  │ │
-│  │  │ - セッション管理   │  │                             │  │ │
+│  │  │ - Key pair gen    │  │ - Channel key management    │  │ │
+│  │  │ - Session mgmt    │  │                             │  │ │
 │  │  └───────────────────┘  └─────────────────────────────┘  │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────┐ │
@@ -35,27 +35,27 @@ Clawleash の SignalR サーバーコンポーネント。WebSocket および We
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 使用方法
+## Usage
 
-### 起動
+### Starting
 
 ```bash
 cd Clawleash.Server
 dotnet run
 
-# または
+# Or
 dotnet run --project Clawleash.Server
 ```
 
-### エンドポイント
+### Endpoints
 
-| パス | 説明 |
-|------|------|
-| `/` | Svelte SPA クライアント |
+| Path | Description |
+|------|-------------|
+| `/` | Svelte SPA client |
 | `/chat` | WebSocket ChatHub |
-| `/signaling` | WebRTC シグナリングハブ |
+| `/signaling` | WebRTC signaling hub |
 
-### 設定
+### Configuration
 
 `appsettings.json`:
 
@@ -72,48 +72,48 @@ dotnet run --project Clawleash.Server
 
 ## ChatHub API
 
-### クライアント → サーバー
+### Client → Server
 
-| メソッド | 説明 |
+| Method | Description |
 |----------|------|
-| `StartKeyExchange()` | E2EE 鍵交換開始 |
-| `CompleteKeyExchange(sessionId, publicKey)` | 鍵交換完了 |
-| `SendMessage(content, channelId, senderName, encrypted, ciphertext)` | メッセージ送信 |
-| `JoinChannel(channelId)` | チャンネル参加 |
-| `LeaveChannel(channelId)` | チャンネル離脱 |
+| `StartKeyExchange()` | Start E2EE key exchange |
+| `CompleteKeyExchange(sessionId, publicKey)` | Complete key exchange |
+| `SendMessage(content, channelId, senderName, encrypted, ciphertext)` | Send message |
+| `JoinChannel(channelId)` | Join channel |
+| `LeaveChannel(channelId)` | Leave channel |
 
-### サーバー → クライアント
+### Server → Client
 
-| イベント | 説明 |
+| Event | Description |
 |----------|------|
-| `MessageReceived` | メッセージ受信 |
-| `ChannelKey` | チャンネル鍵配布 |
-| `KeyExchangeCompleted` | 鍵交換完了通知 |
+| `MessageReceived` | Message received |
+| `ChannelKey` | Channel key distribution |
+| `KeyExchangeCompleted` | Key exchange completion notification |
 
 ## SignalingHub API
 
-### クライアント → サーバー
+### Client → Server
 
-| メソッド | 説明 |
+| Method | Description |
 |----------|------|
-| `Register(peerId, metadata)` | ピア登録 |
-| `Offer(targetPeerId, sdp)` | SDP オファー送信 |
-| `Answer(targetPeerId, sdp)` | SDP アンサー送信 |
-| `IceCandidate(targetPeerId, candidate)` | ICE 候補送信 |
+| `Register(peerId, metadata)` | Register peer |
+| `Offer(targetPeerId, sdp)` | Send SDP offer |
+| `Answer(targetPeerId, sdp)` | Send SDP answer |
+| `IceCandidate(targetPeerId, candidate)` | Send ICE candidate |
 
-### サーバー → クライアント
+### Server → Client
 
-| イベント | 説明 |
+| Event | Description |
 |----------|------|
-| `PeerConnected` | ピー接続通知 |
-| `PeerDisconnected` | ピー切断通知 |
-| `Offer` | SDP オファー受信 |
-| `Answer` | SDP アンサー受信 |
-| `IceCandidate` | ICE 候補受信 |
+| `PeerConnected` | Peer connection notification |
+| `PeerDisconnected` | Peer disconnection notification |
+| `Offer` | SDP offer received |
+| `Answer` | SDP answer received |
+| `IceCandidate` | ICE candidate received |
 
-## CORS 設定
+## CORS Configuration
 
-### 開発環境
+### Development
 
 ```csharp
 policy.WithOrigins("http://localhost:5173", "http://localhost:4173")
@@ -122,9 +122,9 @@ policy.WithOrigins("http://localhost:5173", "http://localhost:4173")
       .AllowCredentials();
 ```
 
-### 本番環境
+### Production
 
-`AllowedOrigins` 設定で許可するオリジンを指定：
+Specify allowed origins in `AllowedOrigins` setting:
 
 ```json
 {
@@ -132,32 +132,32 @@ policy.WithOrigins("http://localhost:5173", "http://localhost:4173")
 }
 ```
 
-## E2EE 鍵交換フロー
+## E2EE Key Exchange Flow
 
 ```
 Client                          Server
   │                               │
   │ ─── StartKeyExchange ──────► │
-  │                               │ 1. 鍵ペア生成
-  │                               │    セッション ID 発行
+  │                               │ 1. Generate key pair
+  │                               │    Issue session ID
   │ ◄── ServerPublicKey ─────── │
   │    SessionId                 │
   │                               │
-  │ 2. 共有秘密生成               │
-  │    チャンネル鍵生成           │
+  │ 2. Generate shared secret     │
+  │    Generate channel key       │
   │                               │
   │ ─── ClientPublicKey ───────► │
-  │    SessionId                 │ 3. 共有秘密生成
+  │    SessionId                 │ 3. Generate shared secret
   │                               │
   │ ◄── KeyExchangeCompleted ── │
   │                               │
   │ ◄── ChannelKey ───────────── │
-  │    (暗号化済み)               │
+  │    (encrypted)               │
 ```
 
-## Svelte クライアント
+## Svelte Client
 
-`Client/` ディレクトリに Svelte アプリケーションを配置：
+Place Svelte application in `Client/` directory:
 
 ```
 Client/
@@ -167,43 +167,43 @@ Client/
 └── ...
 ```
 
-ビルド時に `wwwroot/` にコピーされます。
+Copied to `wwwroot/` during build.
 
-## トラブルシューティング
+## Troubleshooting
 
 ### "CORS policy blocked"
 
-1. 開発環境では `localhost:5173` が許可されています
-2. 本番環境では `AllowedOrigins` を設定してください
+1. `localhost:5173` is allowed in development
+2. Configure `AllowedOrigins` in production
 
-### WebSocket 接続が切れる
+### WebSocket Connection Drops
 
-1. プロキシサーバーで WebSocket が許可されているか確認
-2. Keep-Alive 設定を確認
+1. Verify WebSocket is allowed on proxy server
+2. Check Keep-Alive settings
 
-### E2EE が動作しない
+### E2EE Not Working
 
-1. クライアントとサーバーで `EnableE2ee` が `true` に設定されているか確認
-2. 時刻同期が正しいか確認
+1. Verify `EnableE2ee` is set to `true` on both client and server
+2. Verify time synchronization is correct
 
-## ビルド
+## Build
 
 ```bash
 cd Clawleash.Server
 dotnet build
 ```
 
-## 依存関係
+## Dependencies
 
 - Microsoft.AspNetCore.SignalR
 - Clawleash.Abstractions
 
-## 関連プロジェクト
+## Related Projects
 
-- [Clawleash.Interfaces.WebSocket](../Clawleash.Interfaces.WebSocket/README.md) - WebSocket クライアント
-- [Clawleash.Interfaces.WebRTC](../Clawleash.Interfaces.WebRTC/README.md) - WebRTC クライアント
-- [Clawleash.Abstractions](../Clawleash.Abstractions/README.md) - 共有インターフェース
+- [Clawleash.Interfaces.WebSocket](../Clawleash.Interfaces.WebSocket/README-en.md) - WebSocket client
+- [Clawleash.Interfaces.WebRTC](../Clawleash.Interfaces.WebRTC/README-en.md) - WebRTC client
+- [Clawleash.Abstractions](../Clawleash.Abstractions/README-en.md) - Shared interfaces
 
-## ライセンス
+## License
 
 MIT

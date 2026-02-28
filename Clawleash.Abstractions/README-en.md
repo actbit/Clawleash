@@ -1,24 +1,24 @@
 # Clawleash.Abstractions
 
-Clawleash の共有インターフェースと抽象化を定義するライブラリ。カスタムチャットインターフェースプロバイダーを作成するための基盤を提供します。
+A library defining shared interfaces and abstractions for Clawleash. Provides the foundation for creating custom chat interface providers.
 
-## 概要
+## Overview
 
-このライブラリは以下を提供します：
+This library provides:
 
-- **IChatInterface**: チャットインターフェースの抽象化
-- **ChatMessageReceivedEventArgs**: メッセージ受信イベントの引数
-- **IStreamingMessageWriter**: ストリーミングメッセージ送信用
-- **ChatInterfaceSettingsBase**: 設定のベースクラス
-- **IE2eeProvider**: E2EE 暗号化プロバイダー
+- **IChatInterface**: Chat interface abstraction
+- **ChatMessageReceivedEventArgs**: Message received event arguments
+- **IStreamingMessageWriter**: For streaming message sending
+- **ChatInterfaceSettingsBase**: Base class for settings
+- **IE2eeProvider**: E2EE encryption provider
 
 ---
 
-## カスタムプロバイダーの作成
+## Creating Custom Providers
 
-### 1. プロジェクト作成
+### 1. Project Creation
 
-新しいクラスライブラリプロジェクトを作成し、`Clawleash.Abstractions` を参照します：
+Create a new class library project and reference `Clawleash.Abstractions`:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -32,9 +32,9 @@ Clawleash の共有インターフェースと抽象化を定義するライブ�
 </Project>
 ```
 
-### 2. 設定クラスの作成
+### 2. Creating Settings Class
 
-`ChatInterfaceSettingsBase` を継承して設定クラスを作成します：
+Create a settings class inheriting from `ChatInterfaceSettingsBase`:
 
 ```csharp
 using Clawleash.Abstractions.Configuration;
@@ -44,23 +44,23 @@ namespace Clawleash.Interfaces.MyProvider;
 public class MyProviderSettings : ChatInterfaceSettingsBase
 {
     /// <summary>
-    /// 接続先のサーバーURL
+    /// Server URL to connect to
     /// </summary>
     public string ServerUrl { get; set; } = "https://api.example.com";
 
     /// <summary>
-    /// API キー
+    /// API Key
     /// </summary>
     public string ApiKey { get; set; } = string.Empty;
 
     /// <summary>
-    /// 再接続間隔（ミリ秒）
+    /// Reconnection interval (milliseconds)
     /// </summary>
     public int ReconnectIntervalMs { get; set; } = 5000;
 }
 ```
 
-### 3. IChatInterface の実装
+### 3. Implementing IChatInterface
 
 ```csharp
 using System.Text;
@@ -76,11 +76,11 @@ public class MyProviderChatInterface : IChatInterface
     private bool _isConnected;
     private bool _disposed;
 
-    // 必須プロパティ
+    // Required properties
     public string Name => "MyProvider";
     public bool IsConnected => _isConnected;
 
-    // 必須イベント
+    // Required event
     public event EventHandler<ChatMessageReceivedEventArgs>? MessageReceived;
 
     public MyProviderChatInterface(
@@ -91,7 +91,7 @@ public class MyProviderChatInterface : IChatInterface
         _logger = logger;
     }
 
-    // 必須メソッド: インターフェース開始
+    // Required method: Start interface
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(_settings.ApiKey))
@@ -102,7 +102,7 @@ public class MyProviderChatInterface : IChatInterface
 
         try
         {
-            // 接続処理を実装
+            // Implement connection logic
             await ConnectAsync(cancellationToken);
             _isConnected = true;
             _logger?.LogInformation("{Name} connected", Name);
@@ -114,16 +114,16 @@ public class MyProviderChatInterface : IChatInterface
         }
     }
 
-    // 必須メソッド: インターフェース停止
+    // Required method: Stop interface
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         _isConnected = false;
-        // 切断処理を実装
+        // Implement disconnection logic
         await Task.CompletedTask;
         _logger?.LogInformation("{Name} stopped", Name);
     }
 
-    // 必須メソッド: メッセージ送信
+    // Required method: Send message
     public async Task SendMessageAsync(
         string message,
         string? replyToMessageId = null,
@@ -135,18 +135,18 @@ public class MyProviderChatInterface : IChatInterface
             return;
         }
 
-        // メッセージ送信処理を実装
-        // replyToMessageId がある場合は返信として送信
+        // Implement message sending logic
+        // If replyToMessageId is present, send as a reply
         await Task.CompletedTask;
     }
 
-    // 必須メソッド: ストリーミング送信
+    // Required method: Start streaming message
     public IStreamingMessageWriter StartStreamingMessage(CancellationToken cancellationToken = default)
     {
         return new MyStreamingWriter(this);
     }
 
-    // 必須メソッド: リソース解放
+    // Required method: Dispose resources
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
@@ -155,7 +155,7 @@ public class MyProviderChatInterface : IChatInterface
         await StopAsync();
     }
 
-    // 内部メソッド: メッセージ受信時に呼び出す
+    // Internal method: Call when message is received
     protected virtual void OnMessageReceived(string content, string senderId, string senderName)
     {
         var args = new ChatMessageReceivedEventArgs
@@ -170,7 +170,7 @@ public class MyProviderChatInterface : IChatInterface
             RequiresReply = true,
             Metadata = new Dictionary<string, object>
             {
-                // プロバイダー固有のメタデータ
+                // Provider-specific metadata
                 ["custom_field"] = "value"
             }
         };
@@ -180,12 +180,12 @@ public class MyProviderChatInterface : IChatInterface
 
     private async Task ConnectAsync(CancellationToken ct)
     {
-        // 実際の接続処理
+        // Actual connection logic
         await Task.CompletedTask;
     }
 }
 
-// ストリーミングライターの実装
+// Streaming writer implementation
 internal class MyStreamingWriter : IStreamingMessageWriter
 {
     private readonly StringBuilder _content = new();
@@ -219,35 +219,35 @@ internal class MyStreamingWriter : IStreamingMessageWriter
 
 ---
 
-## プロバイダーのデプロイ
+## Provider Deployment
 
-### ビルド
+### Build
 
 ```bash
 cd Clawleash.Interfaces.MyProvider
 dotnet build -c Release
 ```
 
-### 配置
+### Installation
 
-DLL と依存ファイルをインターフェースディレクトリにコピー：
+Copy DLL and dependencies to the interfaces directory:
 
 ```
 %LocalAppData%\Clawleash\Interfaces\MyProvider\
 ├── Clawleash.Interfaces.MyProvider.dll
 ├── Clawleash.Abstractions.dll
-└── (その他の依存DLL)
+└── (other dependency DLLs)
 ```
 
-### 自動認識
+### Auto-Recognition
 
-アプリケーション実行中にファイルを配置すると、自動的にロードされます（ホットリロード有効時）。
+When files are placed while the application is running, they are automatically loaded (when hot-reload is enabled).
 
 ---
 
-## 設定の統合
+## Settings Integration
 
-### appsettings.json への追加
+### Adding to appsettings.json
 
 ```json
 {
@@ -263,67 +263,67 @@ DLL と依存ファイルをインターフェースディレクトリにコピ�
 }
 ```
 
-### DI への登録
+### DI Registration
 
-プロバイダーは `ActivatorUtilities.CreateInstance` でインスタンス化されるため、設定とロガーを DI に登録します：
+Providers are instantiated using `ActivatorUtilities.CreateInstance`, so register settings and logger in DI:
 
 ```csharp
-// Program.cs で設定を登録
+// Register settings in Program.cs
 services.Configure<MyProviderSettings>(
     configuration.GetSection("ChatInterface:MyProvider"));
 ```
 
 ---
 
-## ChatMessageReceivedEventArgs プロパティ
+## ChatMessageReceivedEventArgs Properties
 
-| プロパティ | 型 | 説明 |
+| Property | Type | Description |
 |-----------|-----|------|
-| `MessageId` | `string` | メッセージの一意識別子 |
-| `SenderId` | `string` | 送信者の一意識別子 |
-| `SenderName` | `string` | 送信者の表示名 |
-| `Content` | `string` | メッセージの内容 |
-| `ChannelId` | `string` | チャンネル/ルーム ID |
-| `Timestamp` | `DateTime` | メッセージのタイムスタンプ (UTC) |
-| `ReplyToMessageId` | `string?` | 返信先メッセージ ID |
-| `RequiresReply` | `bool` | 返信が必要かどうか |
-| `InterfaceName` | `string` | インターフェース名 |
-| `Metadata` | `Dictionary<string, object>` | プロバイダー固有のメタデータ |
+| `MessageId` | `string` | Unique message identifier |
+| `SenderId` | `string` | Unique sender identifier |
+| `SenderName` | `string` | Sender display name |
+| `Content` | `string` | Message content |
+| `ChannelId` | `string` | Channel/Room ID |
+| `Timestamp` | `DateTime` | Message timestamp (UTC) |
+| `ReplyToMessageId` | `string?` | Reply target message ID |
+| `RequiresReply` | `bool` | Whether reply is required |
+| `InterfaceName` | `string` | Interface name |
+| `Metadata` | `Dictionary<string, object>` | Provider-specific metadata |
 
 ---
 
-## IChatInterface メンバー一覧
+## IChatInterface Members
 
-### プロパティ
+### Properties
 
-| プロパティ | 型 | 説明 |
+| Property | Type | Description |
 |-----------|-----|------|
-| `Name` | `string` | インターフェース名（一意） |
-| `IsConnected` | `bool` | 接続状態 |
+| `Name` | `string` | Interface name (unique) |
+| `IsConnected` | `bool` | Connection state |
 
-### イベント
+### Events
 
-| イベント | 説明 |
+| Event | Description |
 |----------|------|
-| `MessageReceived` | メッセージ受信時に発生 |
+| `MessageReceived` | Raised when message is received |
 
-### メソッド
+### Methods
 
-| メソッド | 説明 |
+| Method | Description |
 |----------|------|
-| `StartAsync(CancellationToken)` | インターフェース開始 |
-| `StopAsync(CancellationToken)` | インターフェース停止 |
-| `SendMessageAsync(message, replyToMessageId?, CancellationToken)` | メッセージ送信 |
-| `StartStreamingMessage(CancellationToken)` | ストリーミング送信開始 |
-| `DisposeAsync()` | リソース解放 |
+| `StartAsync(CancellationToken)` | Start interface |
+| `StopAsync(CancellationToken)` | Stop interface |
+| `SendMessageAsync(message, replyToMessageId?, CancellationToken)` | Send message |
+| `StartStreamingMessage(CancellationToken)` | Start streaming message |
+| `DisposeAsync()` | Release resources |
 
 ---
 
-## E2EE 対応
+## E2EE Support
 
-E2EE（エンドツーエンド暗号化）をサポートする場合：
+To support E2EE (End-to-End Encryption):
 
-### 1. IE2eeProvider の使用
+### 1. Using IE2eeProvider
 
 ```csharp
 using Clawleash.Abstractions.Security;
@@ -342,17 +342,17 @@ public class MySecureProvider : IChatInterface
         if (_settings.EnableE2ee && _e2eeProvider.IsEncrypted)
         {
             var ciphertext = await _e2eeProvider.EncryptAsync(message, channelId);
-            // 暗号化されたデータを送信
+            // Send encrypted data
         }
         else
         {
-            // 平文で送信
+            // Send plaintext
         }
     }
 }
 ```
 
-### 2. 設定での有効化
+### 2. Enable in Settings
 
 ```json
 {
@@ -367,9 +367,9 @@ public class MySecureProvider : IChatInterface
 
 ---
 
-## ベストプラクティス
+## Best Practices
 
-### エラーハンドリング
+### Error Handling
 
 ```csharp
 public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -381,22 +381,22 @@ public async Task StartAsync(CancellationToken cancellationToken = default)
     catch (Exception ex)
     {
         _logger?.LogError(ex, "Connection failed");
-        // 接続状態を更新
+        // Update connection state
         _isConnected = false;
         throw;
     }
 }
 ```
 
-### ログ出力
+### Logging
 
 ```csharp
-// 構造化ログを使用
+// Use structured logging
 _logger?.LogInformation("{Name} starting with server: {ServerUrl}", Name, _settings.ServerUrl);
 _logger?.LogDebug("Message received: {MessageId} from {SenderName}", args.MessageId, args.SenderName);
 ```
 
-### リソース管理
+### Resource Management
 
 ```csharp
 public async ValueTask DisposeAsync()
@@ -404,30 +404,30 @@ public async ValueTask DisposeAsync()
     if (_disposed) return;
     _disposed = true;
 
-    // イベントの購読解除
+    // Unsubscribe from events
     // _client.OnMessage -= OnMessage;
 
-    // 接続の切断
+    // Disconnect
     await StopAsync();
 
-    // その他のリソース解放
+    // Release other resources
     _httpClient?.Dispose();
 }
 ```
 
 ---
 
-## 既存プロバイダーの参照
+## Reference Implementations
 
-実装の参考として、以下のプロバイダーを参照してください：
+For implementation reference, see these providers:
 
-- [Clawleash.Interfaces.Discord](../Clawleash.Interfaces.Discord/README.md) - Discord Bot
-- [Clawleash.Interfaces.Slack](../Clawleash.Interfaces.Slack/README.md) - Slack Bot
-- [Clawleash.Interfaces.WebSocket](../Clawleash.Interfaces.WebSocket/README.md) - WebSocket (E2EE)
-- [Clawleash.Interfaces.WebRTC](../Clawleash.Interfaces.WebRTC/README.md) - WebRTC (E2EE)
+- [Clawleash.Interfaces.Discord](../Clawleash.Interfaces.Discord/README-en.md) - Discord Bot
+- [Clawleash.Interfaces.Slack](../Clawleash.Interfaces.Slack/README-en.md) - Slack Bot
+- [Clawleash.Interfaces.WebSocket](../Clawleash.Interfaces.WebSocket/README-en.md) - WebSocket (E2EE)
+- [Clawleash.Interfaces.WebRTC](../Clawleash.Interfaces.WebRTC/README-en.md) - WebRTC (E2EE)
 
 ---
 
-## ライセンス
+## License
 
 MIT

@@ -595,13 +595,13 @@ dotnet run --project Clawleash.Server
 2. `IChatInterface` を実装
 3. ビルドして `%LocalAppData%\Clawleash\Interfaces\` に配置
 
-詳細な開発ガイドは [Clawleash.Abstractions/README.md](Clawleash.Abstractions/README.md) を参照してください。
+詳細な開発ガイドは [Clawleash.Abstractions](Clawleash.Abstractions/README.md) を参照してください。
 
 **実装例:**
-- [Discord](Clawleash.Interfaces.Discord) - Discord Bot
-- [Slack](Clawleash.Interfaces.Slack) - Slack Bot
-- [WebSocket](Clawleash.Interfaces.WebSocket) - WebSocket (E2EE)
-- [WebRTC](Clawleash.Interfaces.WebRTC) - WebRTC (E2EE)
+- [Discord](Clawleash.Interfaces.Discord/README.md) - Discord Bot
+- [Slack](Clawleash.Interfaces.Slack/README.md) - Slack Bot
+- [WebSocket](Clawleash.Interfaces.WebSocket/README.md) - WebSocket (E2EE)
+- [WebRTC](Clawleash.Interfaces.WebRTC/README.md) - WebRTC (E2EE)
 
 ### スキルの追加
 

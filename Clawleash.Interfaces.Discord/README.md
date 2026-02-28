@@ -158,6 +158,10 @@ dotnet build
 - Discord.NET (最新安定版)
 - Clawleash.Abstractions
 
+## 関連プロジェクト
+
+- [Clawleash.Abstractions](../Clawleash.Abstractions/README.md) - 共有インターフェース
+
 ## ライセンス
 
 MIT

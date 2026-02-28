@@ -1,16 +1,16 @@
 # Clawleash.Interfaces.WebSocket
 
-WebSocket チャットインターフェースの完全実装。SignalR クライアントを使用してサーバーとリアルタイム通信を行い、E2EE（エンドツーエンド暗号化）に対応しています。
+A complete implementation of WebSocket chat interface. Uses SignalR client for real-time communication with the server, supporting E2EE (End-to-End Encryption).
 
-## 機能
+## Features
 
-- **SignalR 通信**: ASP.NET Core SignalR によるリアルタイム双方向通信
-- **E2EE 対応**: X25519 鍵交換 + AES-256-GCM によるエンドツーエンド暗号化
-- **チャンネル鍵**: チャンネルごとの暗号化鍵管理
-- **自動再接続**: 指数バックオフによる自動再接続
-- **ストリーミング送信**: 長いメッセージの一括送信対応
+- **SignalR Communication**: Real-time bidirectional communication via ASP.NET Core SignalR
+- **E2EE Support**: End-to-end encryption using X25519 key exchange + AES-256-GCM
+- **Channel Keys**: Per-channel encryption key management
+- **Auto-Reconnect**: Automatic reconnection with exponential backoff
+- **Streaming Send**: Support for batch sending of long messages
 
-## アーキテクチャ
+## Architecture
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -33,22 +33,22 @@ WebSocket チャットインターフェースの完全実装。SignalR クラ�
            └───────────────────────┘
 ```
 
-## E2EE 暗号化フロー
+## E2EE Encryption Flow
 
 ```
 ┌──────────────┐                      ┌──────────────┐
 │   Client     │                      │    Server    │
 │              │                      │              │
-│  1. 鍵交換    │ ◄─── X25519 ────────► │              │
+│  1. Exchange │ ◄─── X25519 ────────► │              │
 │              │                      │              │
-│  2. 暗号化    │                      │              │
+│  2. Encrypt  │                      │              │
 │  Plaintext   │                      │              │
 │     │        │                      │              │
 │     ▼        │                      │              │
 │  AES-256-GCM │                      │              │
 │     │        │                      │              │
 │     ▼        │                      │              │
-│  Ciphertext  │ ──── wss:// ────────► │  3. 復号化    │
+│  Ciphertext  │ ──── wss:// ────────► │  3. Decrypt  │
 │              │                      │  AES-256-GCM │
 │              │                      │     │        │
 │              │                      │     ▼        │
@@ -56,9 +56,9 @@ WebSocket チャットインターフェースの完全実装。SignalR クラ�
 └──────────────┘                      └──────────────┘
 ```
 
-## 使用方法
+## Usage
 
-### 設定
+### Settings
 
 ```csharp
 var settings = new WebSocketSettings
@@ -72,83 +72,83 @@ var settings = new WebSocketSettings
 };
 ```
 
-### 基本的な使用
+### Basic Usage
 
 ```csharp
 var chatInterface = new WebSocketChatInterface(settings, logger);
 
-// イベントハンドラー
+// Event handler
 chatInterface.MessageReceived += (sender, args) =>
 {
     Console.WriteLine($"Message from {args.SenderName}: {args.Content}");
     Console.WriteLine($"Encrypted: {args.Metadata["encrypted"]}");
 };
 
-// 開始（E2EE 有効時は鍵交換も実行）
+// Start (also performs key exchange if E2EE enabled)
 await chatInterface.StartAsync(cancellationToken);
 
-// チャンネルに参加
+// Join channel
 await chatInterface.JoinChannelAsync("general");
 
-// メッセージ送信
+// Send message
 await chatInterface.SendMessageAsync("Hello!", replyToMessageId);
 
-// チャンネルから離脱
+// Leave channel
 await chatInterface.LeaveChannelAsync("general");
 
-// 終了
+// Dispose
 await chatInterface.DisposeAsync();
 ```
 
-## 設定オプション
+## Configuration Options
 
-| プロパティ | 説明 | デフォルト |
+| Property | Description | Default |
 |-----------|------|-----------|
-| `ServerUrl` | SignalR サーバー URL | `ws://localhost:8080/chat` |
-| `EnableE2ee` | E2EE 有効化（親設定から継承） | `false` |
-| `ReconnectIntervalMs` | 再接続間隔 | `5000` |
-| `MaxReconnectAttempts` | 最大再接続試行回数 | `10` |
-| `HeartbeatIntervalMs` | ハートビート間隔 | `30000` |
-| `ConnectionTimeoutMs` | 接続タイムアウト | `10000` |
+| `ServerUrl` | SignalR server URL | `ws://localhost:8080/chat` |
+| `EnableE2ee` | Enable E2EE (inherited from parent settings) | `false` |
+| `ReconnectIntervalMs` | Reconnection interval | `5000` |
+| `MaxReconnectAttempts` | Maximum reconnection attempts | `10` |
+| `HeartbeatIntervalMs` | Heartbeat interval | `30000` |
+| `ConnectionTimeoutMs` | Connection timeout | `10000` |
 
-## イベント
+## Events
 
 ### MessageReceived
 
-メッセージ受信時に発生するイベント。
+Event raised when a message is received.
 
 ```csharp
 chatInterface.MessageReceived += (sender, args) =>
 {
-    // args.MessageId - メッセージ ID
-    // args.SenderId - 送信者 ID
-    // args.SenderName - 送信者名
-    // args.Content - メッセージ内容（復号化済み）
-    // args.ChannelId - チャンネル ID
-    // args.Timestamp - タイムスタンプ
-    // args.Metadata["encrypted"] - 暗号化されていたか
+    // args.MessageId - Message ID
+    // args.SenderId - Sender ID
+    // args.SenderName - Sender name
+    // args.Content - Message content (decrypted)
+    // args.ChannelId - Channel ID
+    // args.Timestamp - Timestamp
+    // args.Metadata["encrypted"] - Whether it was encrypted
 };
 ```
 
-## 再接続ポリシー
+## Reconnection Policy
 
-指数バックオフを使用した自動再接続：
+Automatic reconnection using exponential backoff:
 
 ```
-試行 1: 5 秒後
-試行 2: 10 秒後
-試行 3: 20 秒後
+Attempt 1: After 5 seconds
+Attempt 2: After 10 seconds
+Attempt 3: After 20 seconds
 ...
-最大 60 秒間隔
+Maximum 60 second interval
 ```
 
-最大試行回数に達すると再接続を停止します。
+Stops reconnecting after maximum attempts reached.
 
-## トラブルシューティング
+## Troubleshooting
 
 ### "WebSocket server URL is not configured"
 
-`appsettings.json` で URL が設定されているか確認：
+Verify URL is set in `appsettings.json`:
 
 ```json
 {
@@ -164,38 +164,38 @@ chatInterface.MessageReceived += (sender, args) =>
 
 ### "Failed to connect to SignalR hub"
 
-1. Clawleash.Server が起動しているか確認
-2. URL が正しいか確認（`ws://` または `wss://`）
-3. ファイアウォール設定を確認
+1. Verify Clawleash.Server is running
+2. Verify URL is correct (`ws://` or `wss://`)
+3. Check firewall settings
 
 ### "Key exchange failed"
 
-1. サーバー側でも E2EE が有効か確認
-2. サーバーの時刻が正しいか確認
+1. Verify E2EE is enabled on server side
+2. Verify server time is correct
 
-### メッセージが暗号化されない
+### Messages Not Encrypted
 
-- `EnableE2ee` が `true` に設定されているか確認
-- チャンネル鍵が設定されているか確認（`HasChannelKey`）
+- Verify `EnableE2ee` is set to `true`
+- Verify channel key is set (`HasChannelKey`)
 
-## ビルド
+## Build
 
 ```bash
 cd Clawleash.Interfaces.WebSocket
 dotnet build
 ```
 
-## 依存関係
+## Dependencies
 
 - Microsoft.AspNetCore.SignalR.Client
 - Clawleash.Abstractions
 
-## 関連プロジェクト
+## Related Projects
 
-- [Clawleash.Server](../Clawleash.Server/README.md) - SignalR サーバー
-- [Clawleash.Interfaces.WebRTC](../Clawleash.Interfaces.WebRTC/README.md) - WebRTC インターフェース
-- [Clawleash.Abstractions](../Clawleash.Abstractions/README.md) - 共有インターフェース
+- [Clawleash.Server](../Clawleash.Server/README-en.md) - SignalR server
+- [Clawleash.Interfaces.WebRTC](../Clawleash.Interfaces.WebRTC/README-en.md) - WebRTC interface
+- [Clawleash.Abstractions](../Clawleash.Abstractions/README-en.md) - Shared interfaces
 
-## ライセンス
+## License
 
 MIT

@@ -186,6 +186,12 @@ cd Clawleash && dotnet run
 cd Clawleash && dotnet run
 ```
 
+## 関連プロジェクト
+
+- [Clawleash.Server](../Clawleash.Server/README.md) - シグナリングサーバー
+- [Clawleash.Interfaces.WebSocket](../Clawleash.Interfaces.WebSocket/README.md) - WebSocket インターフェース
+- [Clawleash.Abstractions](../Clawleash.Abstractions/README.md) - 共有インターフェース
+
 ## ライセンス
 
 MIT

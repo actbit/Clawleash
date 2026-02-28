@@ -160,6 +160,10 @@ dotnet build
 - System.Text.Json
 - Clawleash.Abstractions
 
+## 関連プロジェクト
+
+- [Clawleash.Abstractions](../Clawleash.Abstractions/README.md) - 共有インターフェース
+
 ## ライセンス
 
 MIT
