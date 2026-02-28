@@ -6,7 +6,7 @@
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-34%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
+[![Tests](https://img.shields.io/badge/Tests-58%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
 
 *Semantic Kernel × Playwright × PowerShell × MCP × Sandbox Architecture × Multi-Interface*
 
@@ -48,23 +48,23 @@ Clawleashは複数の入力インターフェースを同時にサポートし�
 | **WebRTC** | DataChannel経由のP2P通信 | ✅ DTLS-SRTP |
 
 **アーキテクチャ:**
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       Clawleash (Main Application)                   │
-│  ┌─────────────────────────────────────────────────────────────────┐ │
-│  │     InterfaceLoader + FileSystemWatcher (Hot Reload)            │ │
-│  │  %LocalAppData%\Clawleash\Interfaces\ を監視                     │ │
-│  │  新規DLL追加 → 自動ロード → ChatInterfaceManagerに登録           │ │
-│  └──────────────────────────┬──────────────────────────────────────┘ │
-│                             │                                        │
-│  ┌──────────────────────────┴──────────────────────────────────────┐ │
-│  │                   ChatInterfaceManager                           │ │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │ │
-│  │  │   CLI    │ │ Discord  │ │  Slack   │ │ WebSocket│ │ WebRTC │ │ │
-│  │  │(Built-in)│ │  (DLL)   │ │  (DLL)   │ │  (DLL)   │ │ (DLL)  │ │ │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │ │
-│  └───────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────┘
+
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main Application)"]
+        subgraph IL["InterfaceLoader + FileSystemWatcher (Hot Reload)"]
+            D1["%LocalAppData%\Clawleash\Interfaces\ を監視"]
+            D2["新規DLL追加 → 自動ロード → ChatInterfaceManagerに登録"]
+        end
+        subgraph CIM["ChatInterfaceManager"]
+            CLI["CLI<br/>(Built-in)"]
+            DISC["Discord<br/>(DLL)"]
+            SLK["Slack<br/>(DLL)"]
+            WS["WebSocket<br/>(DLL)"]
+            WRTC["WebRTC<br/>(DLL)"]
+        end
+        IL --> CIM
+    end
 ```
 
 **設定例 (appsettings.json):**
@@ -101,25 +101,18 @@ Clawleashは複数の入力インターフェースを同時にサポートし�
 
 WebSocket・WebRTC通信でE2EEを有効にできます。
 
-```
-┌──────────────┐                      ┌──────────────┐
-│   Client     │                      │    Server    │
-│              │                      │              │
-│  1. 鍵交換    │ ◄─── X25519 ────────► │              │
-│              │                      │              │
-│  2. 暗号化    │                      │              │
-│  Plaintext   │                      │              │
-│     │        │                      │              │
-│     ▼        │                      │              │
-│  AES-256-GCM │                      │              │
-│     │        │                      │              │
-│     ▼        │                      │              │
-│  Ciphertext  │ ──── wss:// ────────► │  3. 復号化    │
-│              │                      │  AES-256-GCM │
-│              │                      │     │        │
-│              │                      │     ▼        │
-│              │                      │  Plaintext   │
-└──────────────┘                      └──────────────┘
+```mermaid
+flowchart LR
+    subgraph Client["Client"]
+        KX1["1. 鍵交換<br/>X25519"]
+        ENC["2. 暗号化<br/>Plaintext → AES-256-GCM → Ciphertext"]
+    end
+    subgraph Server["Server"]
+        KX2["鍵交換"]
+        DEC["3. 復号化<br/>AES-256-GCM → Plaintext"]
+    end
+    KX1 <-.->|X25519| KX2
+    ENC -->|wss://| DEC
 ```
 
 ### Webクローラー（Firecrawl風）
@@ -216,7 +209,7 @@ prompt: |
 
 **トランスポート対応:**
 - **stdio**: ローカルNPXパッケージ、Dockerコンテナ
-- **SSE**: リモートMCPサーバー（今後対応）
+- **SSE**: リモートMCPサーバー（HTTP Server-Sent Events）
 
 ---
 
@@ -349,46 +342,42 @@ services.AddSilentApprovalHandler(config);
 
 ## アーキテクチャ
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Clawleash (Main)                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Kernel    │  │ ToolLoader  │  │   ShellServer       │  │
-│  │  (AI Agent) │  │ (ZIP/DLL)   │  │   (ZeroMQ Router)   │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         │                │                     │ IPC         │
-│         ├────────────────┼─────────────────────┤             │
-│         │  SkillLoader   │   McpClientManager  │             │
-│         │  (YAML/JSON)   │   (stdio/SSE)       │             │
-│         └────────────────┴─────────────────────┘             │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              ChatInterfaceManager                        │ │
-│  │  ┌─────┐ ┌─────────┐ ┌────────┐ ┌──────────┐ ┌───────┐  │ │
-│  │  │ CLI │ │ Discord │ │ Slack  │ │ WebSocket│ │ WebRTC│  │ │
-│  │  └─────┘ └─────────┘ └────────┘ └──────────┘ └───────┘  │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼ MessagePack over ZeroMQ
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash.Shell (Sandboxed)               │
-│  ┌─────────────┐  ┌─────────────────────────────────────┐   │
-│  │  IpcClient  │  │     ConstrainedRunspaceHost         │   │
-│  │  (Dealer)   │  │     (PowerShell SDK)                │   │
-│  └─────────────┘  └─────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main)"]
+        Kernel["Kernel<br/>(AI Agent)"]
+        ToolLoader["ToolLoader<br/>(ZIP/DLL)"]
+        ShellServer["ShellServer<br/>(ZeroMQ Router)"]
+        SkillLoader["SkillLoader<br/>(YAML/JSON)"]
+        McpClient["McpClientManager<br/>(stdio/SSE)"]
+        subgraph CIM["ChatInterfaceManager"]
+            CLI["CLI"]
+            DISC["Discord"]
+            SLK["Slack"]
+            WS["WebSocket"]
+            WRTC["WebRTC"]
+        end
+    end
+    Kernel --> SkillLoader
+    Kernel --> ToolLoader
+    Kernel --> McpClient
+    Kernel --> CIM
+    ToolLoader --> ShellServer
 
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash.Server (Optional)               │
-│  ┌─────────────────────┐  ┌─────────────────────────────┐   │
-│  │     ChatHub         │  │     SignalingHub            │   │
-│  │  (WebSocket/E2EE)   │  │  (WebRTC Signaling)         │   │
-│  └─────────────────────┘  └─────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │     Svelte Client (Static Files)                        │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+    subgraph Shell["Clawleash.Shell (Sandboxed)"]
+        IpcClient["IpcClient<br/>(Dealer)"]
+        Runspace["ConstrainedRunspaceHost<br/>(PowerShell SDK)"]
+    end
+    ShellServer <-.->|MessagePack over ZeroMQ| IpcClient
+    IpcClient --> Runspace
+
+    subgraph Server["Clawleash.Server (Optional)"]
+        ChatHub["ChatHub<br/>(WebSocket/E2EE)"]
+        Signaling["SignalingHub<br/>(WebRTC Signaling)"]
+        Svelte["Svelte Client (Static Files)"]
+    end
+    WS --> ChatHub
+    WRTC --> Signaling
 ```
 
 ## プロジェクト構成
@@ -586,6 +575,23 @@ dotnet run --project Clawleash.Server
 
 ホットリロード対応：新しいDLLを配置すると自動的に読み込まれます。
 
+### カスタムプロバイダーの作成
+
+独自のチャットインターフェースを作成して追加できます。
+
+**手順:**
+1. `Clawleash.Abstractions` を参照したクラスライブラリプロジェクトを作成
+2. `IChatInterface` を実装
+3. ビルドして `%LocalAppData%\Clawleash\Interfaces\` に配置
+
+詳細な開発ガイドは [Clawleash.Abstractions](Clawleash.Abstractions/README.md) を参照してください。
+
+**実装例:**
+- [Discord](Clawleash.Interfaces.Discord/README.md) - Discord Bot
+- [Slack](Clawleash.Interfaces.Slack/README.md) - Slack Bot
+- [WebSocket](Clawleash.Interfaces.WebSocket/README.md) - WebSocket (E2EE)
+- [WebRTC](Clawleash.Interfaces.WebRTC/README.md) - WebRTC (E2EE)
+
 ### スキルの追加
 
 ```
@@ -598,17 +604,503 @@ dotnet run --project Clawleash.Server
 
 ## IPC通信
 
+Main プロセスと Shell プロセス間の通信には ZeroMQ + MessagePack を使用します。
+
+### 通信仕様
+
 | 項目 | 仕様 |
 |------|------|
-| プロトコル | ZeroMQ (Router/Dealer) |
-| シリアライズ | MessagePack |
-| 方向 | Main (Server) ← Shell (Client) |
+| ライブラリ | NetMQ (ZeroMQ .NET実装) |
+| パターン | Router/Dealer |
+| シリアライズ | MessagePack (Union属性によるポリモーフィズム) |
+| トランスポート | TCP (localhost) |
+| 方向 | Main (Router/Server) ↔ Shell (Dealer/Client) |
 
-**メッセージ種別:**
-- `ShellExecuteRequest/Response` - コマンド実行
-- `ToolInvokeRequest/Response` - ツール呼び出し
-- `ShellInitializeRequest/Response` - 初期化
-- `ShellPingRequest/Response` - 死活監視
+### アーキテクチャ
+
+```mermaid
+flowchart TB
+    subgraph Main["Main プロセス"]
+        Router["RouterSocket (Server)<br/>- ランダムポートでバインド<br/>- 複数クライアント接続可能<br/>- Identity でクライアント識別"]
+    end
+    subgraph Shell["Shell プロセス (Sandboxed)"]
+        Dealer["DealerSocket (Client)<br/>- 動的に割り当てられたIdentity<br/>- 非同期リクエスト/レスポンス"]
+    end
+    Router <-.->|ZeroMQ TCP| Dealer
+```
+
+### 接続フロー
+
+```mermaid
+sequenceDiagram
+    participant Main
+    participant Shell
+    Main->>Main: 1. RouterSocket.BindRandomPort<br/>(例: tcp://127.0.0.1:5555)
+    Main->>Shell: 2. プロセス起動 --server "tcp://..."
+    Shell->>Shell: 3. DealerSocket.Connect()
+    Shell->>Main: ShellReadyMessage<br/>(ProcessId, Runtime, OS)
+    Main->>Shell: ShellInitializeRequest<br/>(AllowedCommands, Paths)
+    Shell->>Main: ShellInitializeResponse<br/>(Success, Version)
+    Note over Main,Shell: 準備完了
+```
+
+### メッセージ一覧
+
+#### 基本メッセージ（全メッセージ共通）
+
+```csharp
+public abstract class ShellMessage
+{
+    public string MessageId { get; set; }      // 一意識別子
+    public DateTime Timestamp { get; set; }    // UTC タイムスタンプ
+}
+```
+
+#### 1. ShellReadyMessage (Shell → Main)
+
+接続完了時に送信される準備完了通知。
+
+```csharp
+public class ShellReadyMessage : ShellMessage
+{
+    public int ProcessId { get; set; }        // Shell プロセス ID
+    public string Runtime { get; set; }       // .NET ランタイム情報
+    public string OS { get; set; }            // OS 情報
+}
+```
+
+#### 2. ShellInitializeRequest/Response (Main ↔ Shell)
+
+Shell 実行環境の初期化。
+
+**Request:**
+```csharp
+public class ShellInitializeRequest : ShellMessage
+{
+    public string[] AllowedCommands { get; set; }    // 許可コマンド
+    public string[] AllowedPaths { get; set; }       // 読み書き許可パス
+    public string[] ReadOnlyPaths { get; set; }      // 読み取り専用パス
+    public ShellLanguageMode LanguageMode { get; set; } // ConstrainedLanguage
+}
+```
+
+**Response:**
+```csharp
+public class ShellInitializeResponse : ShellMessage
+{
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+    public string Version { get; set; }
+    public string Runtime { get; set; }
+}
+```
+
+#### 3. ShellExecuteRequest/Response (Main ↔ Shell)
+
+PowerShell コマンドの実行。
+
+**Request:**
+```csharp
+public class ShellExecuteRequest : ShellMessage
+{
+    public string Command { get; set; }              // 実行コマンド
+    public Dictionary<string, object?> Parameters { get; set; }
+    public string? WorkingDirectory { get; set; }
+    public int TimeoutMs { get; set; } = 30000;
+    public ShellExecutionMode Mode { get; set; }
+}
+```
+
+**Response:**
+```csharp
+public class ShellExecuteResponse : ShellMessage
+{
+    public string RequestId { get; set; }
+    public bool Success { get; set; }
+    public string Output { get; set; }              // 標準出力
+    public string? Error { get; set; }              // エラーメッセージ
+    public int ExitCode { get; set; }
+    public Dictionary<string, object?> Metadata { get; set; }
+}
+```
+
+#### 4. ToolInvokeRequest/Response (Main ↔ Shell)
+
+ツールパッケージのメソッド呼び出し。
+
+**Request:**
+```csharp
+public class ToolInvokeRequest : ShellMessage
+{
+    public string ToolName { get; set; }            // ツール名
+    public string MethodName { get; set; }          // メソッド名
+    public object?[] Arguments { get; set; }        // 引数
+}
+```
+
+**Response:**
+```csharp
+public class ToolInvokeResponse : ShellMessage
+{
+    public string RequestId { get; set; }
+    public bool Success { get; set; }
+    public object? Result { get; set; }             // 戻り値
+    public string? Error { get; set; }
+}
+```
+
+#### 5. ShellPingRequest/Response (Main ↔ Shell)
+
+死活監視・レイテンシ測定。
+
+**Request:**
+```csharp
+public class ShellPingRequest : ShellMessage
+{
+    public string Payload { get; set; } = "ping";
+}
+```
+
+**Response:**
+```csharp
+public class ShellPingResponse : ShellMessage
+{
+    public string Payload { get; set; } = "pong";
+    public long ProcessingTimeMs { get; set; }      // 処理時間
+}
+```
+
+#### 6. ShellShutdownRequest/Response (Main ↔ Shell)
+
+Shell プロセスのシャットダウン。
+
+**Request:**
+```csharp
+public class ShellShutdownRequest : ShellMessage
+{
+    public bool Force { get; set; }                 // 強制終了フラグ
+}
+```
+
+**Response:**
+```csharp
+public class ShellShutdownResponse : ShellMessage
+{
+    public bool Success { get; set; }
+}
+```
+
+### MessagePack シリアライズ
+
+```csharp
+// Union 属性でポリモーフィック デシリアライズ
+[MessagePackObject]
+[Union(0, typeof(ShellExecuteRequest))]
+[Union(1, typeof(ShellExecuteResponse))]
+[Union(2, typeof(ShellInitializeRequest))]
+// ...
+public abstract class ShellMessage { ... }
+
+// シリアライズ
+var data = MessagePackSerializer.Serialize(request);
+
+// デシリアライズ
+var message = MessagePackSerializer.Deserialize<ShellMessage>(data);
+```
+
+### エラーハンドリング
+
+```csharp
+try
+{
+    var response = await shellServer.ExecuteAsync(request);
+    if (!response.Success)
+    {
+        // コマンド実行失敗
+        Console.WriteLine($"Error: {response.Error}");
+    }
+}
+catch (TimeoutException)
+{
+    // Shell からの応答なし
+}
+catch (InvalidOperationException)
+{
+    // Shell に接続されていない
+}
+```
+
+### タイムアウト設定
+
+```csharp
+var options = new ShellServerOptions
+{
+    StartTimeoutMs = 10000,           // 起動タイムアウト
+    CommunicationTimeoutMs = 30000,   // 通信タイムアウト
+    Verbose = true                    // 詳細ログ
+};
+```
+
+---
+
+## 拡張機能の開発
+
+### MCPサーバーの追加
+
+外部MCPサーバーを追加して、そのツールをClawleash内で使用できます。
+
+**appsettings.json:**
+
+```json
+{
+  "Mcp": {
+    "Enabled": true,
+    "Servers": [
+      {
+        "name": "filesystem",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
+        "enabled": true,
+        "timeoutMs": 30000,
+        "useSandbox": true
+      },
+      {
+        "name": "github",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "environment": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "enabled": true
+      },
+      {
+        "name": "remote-server",
+        "transport": "sse",
+        "url": "https://api.example.com/mcp/sse",
+        "headers": {
+          "Authorization": "Bearer ${API_KEY}"
+        },
+        "enabled": true,
+        "timeoutMs": 60000
+      }
+    ]
+  }
+}
+```
+
+**MCP設定プロパティ:**
+
+| プロパティ | 説明 | 必須 |
+|-----------|------|------|
+| `name` | サーバー名（一意識別子） | ✅ |
+| `transport` | `stdio` または `sse` | ✅ |
+| `command` | 実行コマンド（stdio用） | stdio時 |
+| `args` | コマンド引数 | |
+| `environment` | 環境変数 | |
+| `url` | サーバーURL（SSE用） | SSE時 |
+| `headers` | HTTPヘッダー（SSE用） | |
+| `enabled` | 有効/無効 | |
+| `timeoutMs` | タイムアウト（ミリ秒） | |
+| `useSandbox` | サンドボックスで実行 | |
+
+**使用可能なツールの確認:**
+
+```
+ユーザー: MCPサーバーのツール一覧を表示して
+AI: list_tools ツールを実行してツール一覧を表示
+```
+
+### ツールパッケージの作成
+
+ネイティブなFunction CallingライブラリをZIPパッケージとして追加できます。
+
+**1. プロジェクト作成**
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SemanticKernel.Core" Version="1.*" />
+  </ItemGroup>
+</Project>
+```
+
+**2. ツールクラスの実装**
+
+```csharp
+using Microsoft.SemanticKernel;
+
+namespace MyTools;
+
+public class WeatherTools
+{
+    [KernelFunction("get_weather")]
+    [Description("指定した都市の天気を取得します")]
+    public async Task<string> GetWeatherAsync(
+        [Description("都市名")] string city,
+        [Description("単位（celsius/fahrenheit）")] string unit = "celsius")
+    {
+        // 天気取得ロジック
+        return $"{city}の天気: 晴れ, 気温: 25{unit}";
+    }
+
+    [KernelFunction("get_forecast")]
+    [Description("天気予報を取得します")]
+    public async Task<string> GetForecastAsync(
+        [Description("都市名")] string city,
+        [Description("予報日数（1-7）")] int days = 3)
+    {
+        return $"{city}の{days}日間予報: 晴れ→曇り→雨";
+    }
+}
+```
+
+**3. マニフェスト作成（tool-manifest.json）**
+
+```json
+{
+  "name": "WeatherTools",
+  "version": "1.0.0",
+  "description": "天気情報ツール",
+  "mainAssembly": "MyTools.dll",
+  "dependencies": []
+}
+```
+
+**4. パッケージ作成**
+
+```bash
+# ZIPパッケージを作成
+zip -r WeatherTools.zip MyTools.dll tool-manifest.json
+
+# 配置
+cp WeatherTools.zip "%LocalAppData%\Clawleash\Packages\"
+```
+
+**パッケージ構成:**
+
+```
+WeatherTools.zip
+├── tool-manifest.json     # マニフェスト
+├── MyTools.dll            # メインアセンブリ
+└── (依存DLL)              # 必要に応じて
+```
+
+**ホットリロード:** PackagesディレクトリにZIPを配置すると自動的にロードされます。
+
+#### ネイティブツールパッケージ vs MCP
+
+| 項目 | ネイティブツールパッケージ | MCP |
+|------|--------------------------|-----|
+| **実行環境** | サンドボックス内で直接実行 | 外部プロセス |
+| **アクセス制御** | AppContainer + フォルダーポリシー | MCPサーバー側で制御 |
+| **ネットワーク** | ケーパビリティで制御 | MCPサーバー次第 |
+| **プロセス分離** | Shellプロセス内で分離 | 完全に別プロセス |
+| **監査** | 詳細ログ可能 | MCPサーバー依存 |
+| **デプロイ** | ZIPで簡単配置 | MCPサーバー構築必要 |
+
+**ネイティブツールパッケージが推奨されるケース:**
+- 社内ツール・機密データを扱うツール
+- 厳密なアクセス制御が必要な場合
+- 監査ログが必須な環境
+- ネットワークアクセスを制限したい場合
+
+**MCPが推奨されるケース:**
+- 既存のMCPサーバーを利用したい場合
+- 外部サービスとの連携
+- コミュニティ提供のツールを使用したい場合
+
+### サンドボックス実行の仕組み
+
+ツールパッケージとシェルコマンドは、サンドボックス環境内で安全に実行されます。
+
+**アーキテクチャ:**
+
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main Process)"]
+        Kernel["Kernel<br/>(AI Agent)"]
+        ToolLoader["ToolLoader<br/>(ZIP/DLL)"]
+        ShellServer["ShellServer<br/>(ZeroMQ Router)"]
+        Proxy["ToolProxy<br/>(経由で呼出)"]
+    end
+    Kernel --> Proxy
+    Proxy --> ToolLoader
+    Proxy --> ShellServer
+
+    subgraph Shell["Clawleash.Shell (Sandboxed Process)"]
+        subgraph ALC["AssemblyLoadContext (分離ロード)"]
+            DLL1["Tool DLL<br/>(分離済み)"]
+            DLL2["Tool DLL<br/>(分離済み)"]
+            PS["PowerShell<br/>Constrained"]
+        end
+        subgraph Sandbox["AppContainer (Windows) / Bubblewrap (Linux)"]
+            ACL["- ファイルシステムアクセス制御"]
+            NET["- ネットワークアクセス制御"]
+            EXEC["- プロセス実行制御"]
+            POL["- フォルダーポリシー適用"]
+        end
+    end
+    ShellServer <-.->|IPC| ALC
+```
+
+**実行フロー:**
+
+1. **ツール呼び出し時:**
+   - Kernel → ToolProxy → ShellServer (IPC)
+   - ShellServer → Shell (サンドボックス内)
+   - Shell → AssemblyLoadContext → Tool DLL
+   - 結果を逆順で返却
+
+2. **分離の仕組み:**
+   - 各ツールパッケージは独立した`AssemblyLoadContext`でロード
+   - アンロード可能（`isCollectible: true`）
+   - ツール削除時にメモリ解放
+
+3. **セキュリティ境界:**
+   - **プロセス分離**: Main ↔ Shell は別プロセス
+   - **OSレベル分離**: AppContainer/Bubblewrap でリソース制限
+   - **フォルダーポリシー**: パスごとのアクセス制御
+
+**AppContainerケーパビリティ（Windows）:**
+
+```json
+{
+  "Sandbox": {
+    "Type": "AppContainer",
+    "AppContainerName": "Clawleash.Sandbox",
+    "Capabilities": "InternetClient, PrivateNetworkClientServer"
+  }
+}
+```
+
+| ケーパビリティ | 許可される操作 |
+|--------------|---------------|
+| `InternetClient` | インターネットへの送信接続 |
+| `PrivateNetworkClientServer` | プライベートネットワークへの接続 |
+| なし | ネットワークアクセス禁止 |
+
+**フォルダーポリシーによる制御:**
+
+```json
+{
+  "Sandbox": {
+    "FolderPolicies": [
+      {
+        "Path": "C:\\Work",
+        "Access": "ReadWrite",
+        "Execute": "Deny",
+        "DeniedExtensions": [".exe", ".bat", ".ps1"]
+      }
+    ]
+  }
+}
+```
 
 ---
 

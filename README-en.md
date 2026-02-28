@@ -6,7 +6,7 @@
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-34%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
+[![Tests](https://img.shields.io/badge/Tests-58%20passed-brightgreen?style=flat-square)](Clawleash.Tests)
 
 *Semantic Kernel × Playwright × PowerShell × MCP × Sandbox Architecture × Multi-Interface*
 
@@ -48,23 +48,23 @@ Clawleash supports multiple input interfaces simultaneously.
 | **WebRTC** | P2P communication via DataChannel | ✅ DTLS-SRTP |
 
 **Architecture:**
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       Clawleash (Main Application)                   │
-│  ┌─────────────────────────────────────────────────────────────────┐ │
-│  │     InterfaceLoader + FileSystemWatcher (Hot Reload)            │ │
-│  │  %LocalAppData%\Clawleash\Interfaces\ monitored                  │ │
-│  │  New DLL → Auto-load → Register with ChatInterfaceManager       │ │
-│  └──────────────────────────┬──────────────────────────────────────┘ │
-│                             │                                        │
-│  ┌──────────────────────────┴──────────────────────────────────────┐ │
-│  │                   ChatInterfaceManager                           │ │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │ │
-│  │  │   CLI    │ │ Discord  │ │  Slack   │ │ WebSocket│ │ WebRTC │ │ │
-│  │  │(Built-in)│ │  (DLL)   │ │  (DLL)   │ │  (DLL)   │ │ (DLL)  │ │ │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │ │
-│  └───────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────┘
+
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main Application)"]
+        subgraph IL["InterfaceLoader + FileSystemWatcher (Hot Reload)"]
+            D1["%LocalAppData%\Clawleash\Interfaces\ monitored"]
+            D2["New DLL → Auto-load → Register with ChatInterfaceManager"]
+        end
+        subgraph CIM["ChatInterfaceManager"]
+            CLI["CLI<br/>(Built-in)"]
+            DISC["Discord<br/>(DLL)"]
+            SLK["Slack<br/>(DLL)"]
+            WS["WebSocket<br/>(DLL)"]
+            WRTC["WebRTC<br/>(DLL)"]
+        end
+        IL --> CIM
+    end
 ```
 
 **Configuration Example (appsettings.json):**
@@ -101,25 +101,18 @@ Clawleash supports multiple input interfaces simultaneously.
 
 Enable E2EE for WebSocket and WebRTC communications.
 
-```
-┌──────────────┐                      ┌──────────────┐
-│   Client     │                      │    Server    │
-│              │                      │              │
-│  1. Exchange │ ◄─── X25519 ────────► │              │
-│              │                      │              │
-│  2. Encrypt  │                      │              │
-│  Plaintext   │                      │              │
-│     │        │                      │              │
-│     ▼        │                      │              │
-│  AES-256-GCM │                      │              │
-│     │        │                      │              │
-│     ▼        │                      │              │
-│  Ciphertext  │ ──── wss:// ────────► │  3. Decrypt  │
-│              │                      │  AES-256-GCM │
-│              │                      │     │        │
-│              │                      │     ▼        │
-│              │                      │  Plaintext   │
-└──────────────┘                      └──────────────┘
+```mermaid
+flowchart LR
+    subgraph Client["Client"]
+        KX1["1. Key Exchange<br/>X25519"]
+        ENC["2. Encrypt<br/>Plaintext → AES-256-GCM → Ciphertext"]
+    end
+    subgraph Server["Server"]
+        KX2["Key Exchange"]
+        DEC["3. Decrypt<br/>AES-256-GCM → Plaintext"]
+    end
+    KX1 <-.->|X25519| KX2
+    ENC -->|wss://| DEC
 ```
 
 ### Web Crawler (Firecrawl-style)
@@ -216,7 +209,7 @@ Use tools from external MCP servers within Clawleash.
 
 **Transport Support:**
 - **stdio**: Local NPX packages, Docker containers
-- **SSE**: Remote MCP servers (coming soon)
+- **SSE**: Remote MCP servers (HTTP Server-Sent Events)
 
 ---
 
@@ -349,46 +342,42 @@ services.AddSilentApprovalHandler(config);
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Clawleash (Main)                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Kernel    │  │ ToolLoader  │  │   ShellServer       │  │
-│  │  (AI Agent) │  │ (ZIP/DLL)   │  │   (ZeroMQ Router)   │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         │                │                     │ IPC         │
-│         ├────────────────┼─────────────────────┤             │
-│         │  SkillLoader   │   McpClientManager  │             │
-│         │  (YAML/JSON)   │   (stdio/SSE)       │             │
-│         └────────────────┴─────────────────────┘             │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              ChatInterfaceManager                        │ │
-│  │  ┌─────┐ ┌─────────┐ ┌────────┐ ┌──────────┐ ┌───────┐  │ │
-│  │  │ CLI │ │ Discord │ │ Slack  │ │ WebSocket│ │ WebRTC│  │ │
-│  │  └─────┘ └─────────┘ └────────┘ └──────────┘ └───────┘  │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼ MessagePack over ZeroMQ
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash.Shell (Sandboxed)               │
-│  ┌─────────────┐  ┌─────────────────────────────────────┐   │
-│  │  IpcClient  │  │     ConstrainedRunspaceHost         │   │
-│  │  (Dealer)   │  │     (PowerShell SDK)                │   │
-│  └─────────────┘  └─────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main)"]
+        Kernel["Kernel<br/>(AI Agent)"]
+        ToolLoader["ToolLoader<br/>(ZIP/DLL)"]
+        ShellServer["ShellServer<br/>(ZeroMQ Router)"]
+        SkillLoader["SkillLoader<br/>(YAML/JSON)"]
+        McpClient["McpClientManager<br/>(stdio/SSE)"]
+        subgraph CIM["ChatInterfaceManager"]
+            CLI["CLI"]
+            DISC["Discord"]
+            SLK["Slack"]
+            WS["WebSocket"]
+            WRTC["WebRTC"]
+        end
+    end
+    Kernel --> SkillLoader
+    Kernel --> ToolLoader
+    Kernel --> McpClient
+    Kernel --> CIM
+    ToolLoader --> ShellServer
 
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash.Server (Optional)               │
-│  ┌─────────────────────┐  ┌─────────────────────────────┐   │
-│  │     ChatHub         │  │     SignalingHub            │   │
-│  │  (WebSocket/E2EE)   │  │  (WebRTC Signaling)         │   │
-│  └─────────────────────┘  └─────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │     Svelte Client (Static Files)                        │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+    subgraph Shell["Clawleash.Shell (Sandboxed)"]
+        IpcClient["IpcClient<br/>(Dealer)"]
+        Runspace["ConstrainedRunspaceHost<br/>(PowerShell SDK)"]
+    end
+    ShellServer <-.->|MessagePack over ZeroMQ| IpcClient
+    IpcClient --> Runspace
+
+    subgraph Server["Clawleash.Server (Optional)"]
+        ChatHub["ChatHub<br/>(WebSocket/E2EE)"]
+        Signaling["SignalingHub<br/>(WebRTC Signaling)"]
+        Svelte["Svelte Client (Static Files)"]
+    end
+    WS --> ChatHub
+    WRTC --> Signaling
 ```
 
 ## Project Structure
@@ -586,6 +575,23 @@ dotnet run --project Clawleash.Server
 
 Hot-reload enabled: New DLLs are automatically loaded when placed in the directory.
 
+### Creating Custom Providers
+
+You can create and add your own chat interfaces.
+
+**Steps:**
+1. Create a class library project referencing `Clawleash.Abstractions`
+2. Implement `IChatInterface`
+3. Build and place in `%LocalAppData%\Clawleash\Interfaces\`
+
+See [Clawleash.Abstractions](Clawleash.Abstractions/README-en.md) for detailed development guide.
+
+**Example Implementations:**
+- [Discord](Clawleash.Interfaces.Discord/README-en.md) - Discord Bot
+- [Slack](Clawleash.Interfaces.Slack/README-en.md) - Slack Bot
+- [WebSocket](Clawleash.Interfaces.WebSocket/README-en.md) - WebSocket (E2EE)
+- [WebRTC](Clawleash.Interfaces.WebRTC/README-en.md) - WebRTC (E2EE)
+
 ### Adding Skills
 
 ```
@@ -598,17 +604,473 @@ Hot-reload enabled: New DLLs are automatically loaded when placed in the directo
 
 ## IPC Communication
 
+Communication between Main and Shell processes uses ZeroMQ + MessagePack.
+
+### Communication Specification
+
 | Item | Specification |
 |------|---------------|
-| Protocol | ZeroMQ (Router/Dealer) |
-| Serialization | MessagePack |
-| Direction | Main (Server) ← Shell (Client) |
+| Library | NetMQ (ZeroMQ .NET implementation) |
+| Pattern | Router/Dealer |
+| Serialization | MessagePack (Union attribute for polymorphism) |
+| Transport | TCP (localhost) |
+| Direction | Main (Router/Server) ↔ Shell (Dealer/Client) |
 
-**Message Types:**
-- `ShellExecuteRequest/Response` - Command execution
-- `ToolInvokeRequest/Response` - Tool invocation
-- `ShellInitializeRequest/Response` - Initialization
-- `ShellPingRequest/Response` - Health check
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph Main["Main Process"]
+        Router["RouterSocket (Server)<br/>- Bind to random port<br/>- Multiple client connections supported<br/>- Client identification via Identity"]
+    end
+    subgraph Shell["Shell Process (Sandboxed)"]
+        Dealer["DealerSocket (Client)<br/>- Dynamically assigned Identity<br/>- Async request/response"]
+    end
+    Router <-.->|ZeroMQ TCP| Dealer
+```
+
+### Connection Flow
+
+```mermaid
+sequenceDiagram
+    participant Main
+    participant Shell
+    Main->>Main: 1. RouterSocket.BindRandomPort<br/>(e.g., tcp://127.0.0.1:5555)
+    Main->>Shell: 2. Process start --server "tcp://..."
+    Shell->>Shell: 3. DealerSocket.Connect()
+    Shell->>Main: ShellReadyMessage<br/>(ProcessId, Runtime, OS)
+    Main->>Shell: ShellInitializeRequest<br/>(AllowedCommands, Paths)
+    Shell->>Main: ShellInitializeResponse<br/>(Success, Version)
+    Note over Main,Shell: Ready
+```
+
+### Message Types
+
+#### Base Message (Common to All Messages)
+
+```csharp
+public abstract class ShellMessage
+{
+    public string MessageId { get; set; }      // Unique identifier
+    public DateTime Timestamp { get; set; }    // UTC timestamp
+}
+```
+
+#### 1. ShellReadyMessage (Shell → Main)
+
+Ready notification sent on connection completion.
+
+```csharp
+public class ShellReadyMessage : ShellMessage
+{
+    public int ProcessId { get; set; }        // Shell process ID
+    public string Runtime { get; set; }       // .NET runtime info
+    public string OS { get; set; }            // OS information
+}
+```
+
+#### 2. ShellInitializeRequest/Response (Main ↔ Shell)
+
+Initialize the Shell execution environment.
+
+**Request:**
+```csharp
+public class ShellInitializeRequest : ShellMessage
+{
+    public string[] AllowedCommands { get; set; }    // Permitted commands
+    public string[] AllowedPaths { get; set; }       // Read/write allowed paths
+    public string[] ReadOnlyPaths { get; set; }      // Read-only paths
+    public ShellLanguageMode LanguageMode { get; set; } // ConstrainedLanguage
+}
+```
+
+**Response:**
+```csharp
+public class ShellInitializeResponse : ShellMessage
+{
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+    public string Version { get; set; }
+    public string Runtime { get; set; }
+}
+```
+
+#### 3. ShellExecuteRequest/Response (Main ↔ Shell)
+
+Execute PowerShell commands.
+
+**Request:**
+```csharp
+public class ShellExecuteRequest : ShellMessage
+{
+    public string Command { get; set; }              // Command to execute
+    public Dictionary<string, object?> Parameters { get; set; }
+    public string? WorkingDirectory { get; set; }
+    public int TimeoutMs { get; set; } = 30000;
+    public ShellExecutionMode Mode { get; set; }
+}
+```
+
+**Response:**
+```csharp
+public class ShellExecuteResponse : ShellMessage
+{
+    public string RequestId { get; set; }
+    public bool Success { get; set; }
+    public string Output { get; set; }              // Standard output
+    public string? Error { get; set; }              // Error message
+    public int ExitCode { get; set; }
+    public Dictionary<string, object?> Metadata { get; set; }
+}
+```
+
+#### 4. ToolInvokeRequest/Response (Main ↔ Shell)
+
+Invoke methods from tool packages.
+
+**Request:**
+```csharp
+public class ToolInvokeRequest : ShellMessage
+{
+    public string ToolName { get; set; }            // Tool name
+    public string MethodName { get; set; }          // Method name
+    public object?[] Arguments { get; set; }        // Arguments
+}
+```
+
+**Response:**
+```csharp
+public class ToolInvokeResponse : ShellMessage
+{
+    public string RequestId { get; set; }
+    public bool Success { get; set; }
+    public object? Result { get; set; }             // Return value
+    public string? Error { get; set; }
+}
+```
+
+#### 5. ShellPingRequest/Response (Main ↔ Shell)
+
+Health monitoring and latency measurement.
+
+**Request:**
+```csharp
+public class ShellPingRequest : ShellMessage
+{
+    public string Payload { get; set; } = "ping";
+}
+```
+
+**Response:**
+```csharp
+public class ShellPingResponse : ShellMessage
+{
+    public string Payload { get; set; } = "pong";
+    public long ProcessingTimeMs { get; set; }      // Processing time
+}
+```
+
+#### 6. ShellShutdownRequest/Response (Main ↔ Shell)
+
+Shutdown the Shell process.
+
+**Request:**
+```csharp
+public class ShellShutdownRequest : ShellMessage
+{
+    public bool Force { get; set; }                 // Force shutdown flag
+}
+```
+
+**Response:**
+```csharp
+public class ShellShutdownResponse : ShellMessage
+{
+    public bool Success { get; set; }
+}
+```
+
+### MessagePack Serialization
+
+```csharp
+// Union attribute for polymorphic deserialization
+[MessagePackObject]
+[Union(0, typeof(ShellExecuteRequest))]
+[Union(1, typeof(ShellExecuteResponse))]
+[Union(2, typeof(ShellInitializeRequest))]
+// ...
+public abstract class ShellMessage { ... }
+
+// Serialize
+var data = MessagePackSerializer.Serialize(request);
+
+// Deserialize
+var message = MessagePackSerializer.Deserialize<ShellMessage>(data);
+```
+
+### Error Handling
+
+```csharp
+try
+{
+    var response = await shellServer.ExecuteAsync(request);
+    if (!response.Success)
+    {
+        // Command execution failed
+        Console.WriteLine($"Error: {response.Error}");
+    }
+}
+catch (TimeoutException)
+{
+    // No response from Shell
+}
+catch (InvalidOperationException)
+{
+    // Shell not connected
+}
+```
+
+### Timeout Configuration
+
+```csharp
+var options = new ShellServerOptions
+{
+    StartTimeoutMs = 10000,           // Startup timeout
+    CommunicationTimeoutMs = 30000,   // Communication timeout
+    Verbose = true                    // Verbose logging
+};
+```
+
+---
+
+## Developing Extensions
+
+### Adding MCP Servers
+
+Add external MCP servers to use their tools within Clawleash.
+
+**appsettings.json:**
+
+```json
+{
+  "Mcp": {
+    "Enabled": true,
+    "Servers": [
+      {
+        "name": "filesystem",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"],
+        "enabled": true,
+        "timeoutMs": 30000,
+        "useSandbox": true
+      },
+      {
+        "name": "github",
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "environment": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        },
+        "enabled": true
+      },
+      {
+        "name": "remote-server",
+        "transport": "sse",
+        "url": "https://api.example.com/mcp/sse",
+        "headers": {
+          "Authorization": "Bearer ${API_KEY}"
+        },
+        "enabled": true,
+        "timeoutMs": 60000
+      }
+    ]
+  }
+}
+```
+
+**MCP Configuration Properties:**
+
+| Property | Description | Required |
+|----------|-------------|----------|
+| `name` | Server name (unique identifier) | ✅ |
+| `transport` | `stdio` or `sse` | ✅ |
+| `command` | Command to execute (stdio) | stdio |
+| `args` | Command arguments | No |
+| `environment` | Environment variables | No |
+| `url` | Server URL (SSE) | sse |
+| `headers` | HTTP headers (SSE) | No |
+| `enabled` | Enable/disable server | No |
+| `timeoutMs` | Timeout in milliseconds | No |
+| `useSandbox` | Run in sandbox | No |
+
+### Adding Tool Packages (Native Function Calling)
+
+Create custom tools using Semantic Kernel's `[KernelFunction]` attribute.
+
+**Project Structure:**
+
+```
+MyToolPackage/
+├── MyToolPackage.csproj
+├── WeatherTools.cs
+└── tool-manifest.json (optional)
+```
+
+**tool-manifest.json:**
+
+```json
+{
+  "name": "WeatherTools",
+  "version": "1.0.0",
+  "description": "Weather information tools",
+  "mainAssembly": "MyToolPackage.dll"
+}
+```
+
+**WeatherTools.cs:**
+
+```csharp
+using System.ComponentModel;
+using Microsoft.SemanticKernel;
+
+namespace MyToolPackage;
+
+public class WeatherTools
+{
+    [KernelFunction("get_weather")]
+    [Description("Get weather for specified city")]
+    public async Task<string> GetWeatherAsync(
+        [Description("City name")] string city,
+        [Description("Unit (celsius/fahrenheit)")] string unit = "celsius")
+    {
+        // Weather retrieval logic
+        return $"Weather in {city}: Sunny, Temperature: 25{unit}";
+    }
+}
+```
+
+**Deployment:**
+
+```bash
+# Create ZIP package
+cd MyToolPackage/bin/Release/net10.0
+zip -r ../../weather-tools.zip .
+
+# Copy to packages directory
+cp ../../weather-tools.zip "%LocalAppData%/Clawleash/Packages/"
+```
+
+**Tool Package Directory:** `%LocalAppData%\Clawleash\Packages\`
+
+Hot-reload enabled: New ZIP files are automatically loaded when placed in the directory.
+
+#### Native Tool Packages vs MCP
+
+| Aspect | Native Tool Packages | MCP |
+|--------|---------------------|-----|
+| **Execution** | Direct execution in sandbox | External process |
+| **Access Control** | AppContainer + Folder policies | Controlled by MCP server |
+| **Network** | Capability-based control | Depends on MCP server |
+| **Process Isolation** | Isolated within Shell process | Completely separate process |
+| **Auditing** | Detailed logging available | MCP server dependent |
+| **Deployment** | Simple ZIP deployment | MCP server setup required |
+
+**Use Native Tool Packages when:**
+- Internal tools or handling sensitive data
+- Strict access control is required
+- Audit logging is mandatory
+- Network access should be restricted
+
+**Use MCP when:**
+- Using existing MCP servers
+- Integrating with external services
+- Using community-provided tools
+
+### Sandbox Execution Architecture
+
+Tools are executed in a sandboxed environment for security.
+
+**Architecture:**
+
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main Process)"]
+        Kernel["Kernel<br/>(AI Agent)"]
+        ToolLoader["ToolLoader<br/>(ZIP/DLL)"]
+        ShellServer["ShellServer<br/>(ZeroMQ Router)"]
+    end
+    Kernel --> ToolLoader
+    Kernel --> ShellServer
+
+    subgraph Shell["Clawleash.Shell (Sandboxed Process)"]
+        subgraph Sandbox["AppContainer (Windows) / Bubblewrap (Linux)"]
+            ACL["- File system access control"]
+            NET["- Network access control"]
+            EXEC["- Process execution control"]
+            POL["- Folder policy enforcement"]
+        end
+        subgraph ALC["AssemblyLoadContext (isCollectible: true)"]
+            DLL1["Tool DLLs<br/>(isolated context)"]
+            DLL2["Can be unloaded<br/>when tool is removed"]
+        end
+    end
+    ShellServer <-.->|IPC| ALC
+```
+
+**Execution Flow:**
+
+1. **Tool Invocation:**
+   - Kernel → ToolProxy → ShellServer (IPC)
+   - ShellServer → Shell (inside sandbox)
+   - Shell → AssemblyLoadContext → Tool DLL
+   - Results returned in reverse order
+
+2. **Isolation Mechanism:**
+   - Each tool package is loaded in a separate `AssemblyLoadContext`
+   - Unloadable (`isCollectible: true`)
+   - Memory released when tool is removed
+
+3. **Security Boundaries:**
+   - **Process Isolation**: Main ↔ Shell are separate processes
+   - **OS-level Isolation**: AppContainer/Bubblewrap restricts resources
+   - **Folder Policies**: Path-based access control
+
+**AppContainer Capabilities (Windows):**
+
+```json
+{
+  "Sandbox": {
+    "Type": "AppContainer",
+    "AppContainerName": "Clawleash.Sandbox",
+    "Capabilities": "InternetClient, PrivateNetworkClientServer"
+  }
+}
+```
+
+| Capability | Allowed Operations |
+|------------|-------------------|
+| `InternetClient` | Outbound internet connections |
+| `PrivateNetworkClientServer` | Private network connections |
+| None | No network access |
+
+**Folder Policy Control:**
+
+```json
+{
+  "Sandbox": {
+    "FolderPolicies": [
+      {
+        "Path": "C:\\Work",
+        "Access": "ReadWrite",
+        "Execute": "Deny",
+        "DeniedExtensions": [".exe", ".bat", ".ps1"]
+      }
+    ]
+  }
+}
+```
 
 ---
 
