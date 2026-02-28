@@ -12,48 +12,35 @@ A complete implementation of WebSocket chat interface. Uses SignalR client for r
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────┐
-│         WebSocketChatInterface (C#)              │
-│  ┌────────────────────────────────────────────┐  │
-│  │  HubConnection (SignalR Client)            │  │
-│  │  - Automatic Reconnect                     │  │
-│  │  - Message/Channel Key Handling            │  │
-│  └────────────────────────────────────────────┘  │
-│  ┌────────────────────────────────────────────┐  │
-│  │  AesGcmE2eeProvider                        │  │
-│  │  - X25519 Key Exchange                     │  │
-│  │  - AES-256-GCM Encryption/Decryption       │  │
-│  └────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────┘
-                       │
-           ┌───────────────────────┐
-           │   Clawleash.Server    │
-           │   ChatHub (/chat)     │
-           └───────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Interface["WebSocketChatInterface (C#)"]
+        subgraph Hub["HubConnection (SignalR Client)"]
+            Reconnect["Automatic Reconnect"]
+            Keys["Message/Channel Key Handling"]
+        end
+        subgraph E2EE["AesGcmE2eeProvider"]
+            X25519["X25519 Key Exchange"]
+            AES["AES-256-GCM Encryption/Decryption"]
+        end
+    end
+    Hub --> Server["Clawleash.Server<br/>ChatHub (/chat)"]
 ```
 
 ## E2EE Encryption Flow
 
-```
-┌──────────────┐                      ┌──────────────┐
-│   Client     │                      │    Server    │
-│              │                      │              │
-│  1. Exchange │ ◄─── X25519 ────────► │              │
-│              │                      │              │
-│  2. Encrypt  │                      │              │
-│  Plaintext   │                      │              │
-│     │        │                      │              │
-│     ▼        │                      │              │
-│  AES-256-GCM │                      │              │
-│     │        │                      │              │
-│     ▼        │                      │              │
-│  Ciphertext  │ ──── wss:// ────────► │  3. Decrypt  │
-│              │                      │  AES-256-GCM │
-│              │                      │     │        │
-│              │                      │     ▼        │
-│              │                      │  Plaintext   │
-└──────────────┘                      └──────────────┘
+```mermaid
+flowchart LR
+    subgraph Client["Client"]
+        KX1["1. Key Exchange<br/>X25519"]
+        ENC["2. Encrypt<br/>Plaintext → AES-256-GCM → Ciphertext"]
+    end
+    subgraph Server["Server"]
+        KX2["Key Exchange"]
+        DEC["3. Decrypt<br/>AES-256-GCM → Plaintext"]
+    end
+    KX1 <-.->|X25519| KX2
+    ENC -->|wss://| DEC
 ```
 
 ## Usage

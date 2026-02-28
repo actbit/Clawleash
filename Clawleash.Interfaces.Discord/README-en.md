@@ -12,20 +12,15 @@ A complete implementation of Discord Bot chat interface. Uses Discord.NET to rec
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────┐
-│           DiscordChatInterface (C#)              │
-│  ┌────────────────────────────────────────────┐  │
-│  │  DiscordSocketClient (Discord.NET)         │  │
-│  │  - Gateway Intents                         │  │
-│  │  - Message Received Events                 │  │
-│  └────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────┘
-                       │
-           ┌───────────────────────┐
-           │   Discord Gateway     │
-           │   (WebSocket)         │
-           └───────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Interface["DiscordChatInterface (C#)"]
+        subgraph Client["DiscordSocketClient (Discord.NET)"]
+            Intent["Gateway Intents"]
+            Events["Message Received Events"]
+        end
+    end
+    Client -->|WebSocket| Gateway["Discord Gateway<br/>(WebSocket)"]
 ```
 
 ## Usage

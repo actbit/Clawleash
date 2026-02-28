@@ -12,27 +12,19 @@ Clawleash の SignalR サーバーコンポーネント。WebSocket および We
 
 ## アーキテクチャ
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash.Server                          │
-│  ┌─────────────────────┐  ┌─────────────────────────────┐   │
-│  │     ChatHub         │  │     SignalingHub            │   │
-│  │  (/chat)            │  │  (/signaling)               │   │
-│  │  - E2EE 対応        │  │  - SDP/ICE 候補交換         │   │
-│  │  - チャンネル管理    │  │  - ピア接続管理             │   │
-│  └─────────────────────┘  └─────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │     Security                                             │ │
-│  │  ┌───────────────────┐  ┌─────────────────────────────┐  │ │
-│  │  │ KeyManager        │  │ E2eeMiddleware              │  │ │
-│  │  │ - 鍵ペア生成       │  │ - チャンネル鍵管理          │  │ │
-│  │  │ - セッション管理   │  │                             │  │ │
-│  │  └───────────────────┘  └─────────────────────────────┘  │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │     Svelte Client (Static Files)                        │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Server["Clawleash.Server"]
+        subgraph Hubs["Hubs"]
+            ChatHub["ChatHub<br/>(/chat)<br/>- E2EE 対応<br/>- チャンネル管理"]
+            SignalingHub["SignalingHub<br/>(/signaling)<br/>- SDP/ICE 候補交換<br/>- ピア接続管理"]
+        end
+        subgraph Security["Security"]
+            KeyManager["KeyManager<br/>- 鍵ペア生成<br/>- セッション管理"]
+            Middleware["E2eeMiddleware<br/>- チャンネル鍵管理"]
+        end
+        Svelte["Svelte Client (Static Files)"]
+    end
 ```
 
 ## 使用方法
@@ -134,25 +126,18 @@ policy.WithOrigins("http://localhost:5173", "http://localhost:4173")
 
 ## E2EE 鍵交換フロー
 
-```
-Client                          Server
-  │                               │
-  │ ─── StartKeyExchange ──────► │
-  │                               │ 1. 鍵ペア生成
-  │                               │    セッション ID 発行
-  │ ◄── ServerPublicKey ─────── │
-  │    SessionId                 │
-  │                               │
-  │ 2. 共有秘密生成               │
-  │    チャンネル鍵生成           │
-  │                               │
-  │ ─── ClientPublicKey ───────► │
-  │    SessionId                 │ 3. 共有秘密生成
-  │                               │
-  │ ◄── KeyExchangeCompleted ── │
-  │                               │
-  │ ◄── ChannelKey ───────────── │
-  │    (暗号化済み)               │
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+    Client->>Server: StartKeyExchange
+    Server->>Server: 1. 鍵ペア生成<br/>セッション ID 発行
+    Server->>Client: ServerPublicKey + SessionId
+    Client->>Client: 2. 共有秘密生成<br/>チャンネル鍵生成
+    Client->>Server: ClientPublicKey + SessionId
+    Server->>Server: 3. 共有秘密生成
+    Server->>Client: KeyExchangeCompleted
+    Server->>Client: ChannelKey (暗号化済み)
 ```
 
 ## Svelte クライアント

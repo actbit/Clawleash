@@ -12,27 +12,19 @@ Clawleash's SignalR server component. Provides real-time communication with WebS
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash.Server                          │
-│  ┌─────────────────────┐  ┌─────────────────────────────┐   │
-│  │     ChatHub         │  │     SignalingHub            │   │
-│  │  (/chat)            │  │  (/signaling)               │   │
-│  │  - E2EE Support     │  │  - SDP/ICE candidate exchange│   │
-│  │  - Channel Mgmt     │  │  - Peer connection mgmt     │   │
-│  └─────────────────────┘  └─────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │     Security                                             │ │
-│  │  ┌───────────────────┐  ┌─────────────────────────────┐  │ │
-│  │  │ KeyManager        │  │ E2eeMiddleware              │  │ │
-│  │  │ - Key pair gen    │  │ - Channel key management    │  │ │
-│  │  │ - Session mgmt    │  │                             │  │ │
-│  │  └───────────────────┘  └─────────────────────────────┘  │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │     Svelte Client (Static Files)                        │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Server["Clawleash.Server"]
+        subgraph Hubs["Hubs"]
+            ChatHub["ChatHub<br/>(/chat)<br/>- E2EE Support<br/>- Channel Mgmt"]
+            SignalingHub["SignalingHub<br/>(/signaling)<br/>- SDP/ICE candidate exchange<br/>- Peer connection mgmt"]
+        end
+        subgraph Security["Security"]
+            KeyManager["KeyManager<br/>- Key pair gen<br/>- Session mgmt"]
+            Middleware["E2eeMiddleware<br/>- Channel key management"]
+        end
+        Svelte["Svelte Client (Static Files)"]
+    end
 ```
 
 ## Usage
@@ -134,25 +126,18 @@ Specify allowed origins in `AllowedOrigins` setting:
 
 ## E2EE Key Exchange Flow
 
-```
-Client                          Server
-  │                               │
-  │ ─── StartKeyExchange ──────► │
-  │                               │ 1. Generate key pair
-  │                               │    Issue session ID
-  │ ◄── ServerPublicKey ─────── │
-  │    SessionId                 │
-  │                               │
-  │ 2. Generate shared secret     │
-  │    Generate channel key       │
-  │                               │
-  │ ─── ClientPublicKey ───────► │
-  │    SessionId                 │ 3. Generate shared secret
-  │                               │
-  │ ◄── KeyExchangeCompleted ── │
-  │                               │
-  │ ◄── ChannelKey ───────────── │
-  │    (encrypted)               │
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+    Client->>Server: StartKeyExchange
+    Server->>Server: 1. Generate key pair<br/>Issue session ID
+    Server->>Client: ServerPublicKey + SessionId
+    Client->>Client: 2. Generate shared secret<br/>Generate channel key
+    Client->>Server: ClientPublicKey + SessionId
+    Server->>Server: 3. Generate shared secret
+    Server->>Client: KeyExchangeCompleted
+    Server->>Client: ChannelKey (encrypted)
 ```
 
 ## Svelte Client

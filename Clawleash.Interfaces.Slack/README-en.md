@@ -12,20 +12,15 @@ A complete implementation of Slack Bot chat interface. Uses HTTP API + polling t
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────┐
-│           SlackChatInterface (C#)                │
-│  ┌────────────────────────────────────────────┐  │
-│  │  HTTP Client + Polling Thread              │  │
-│  │  - conversations.history polling           │  │
-│  │  - Message deduplication                   │  │
-│  └────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────┘
-                       │
-           ┌───────────────────────┐
-           │   Slack Web API       │
-           │   (HTTPS)             │
-           └───────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Interface["SlackChatInterface (C#)"]
+        subgraph Client["HTTP Client + Polling Thread"]
+            Poll["conversations.history polling"]
+            Dedup["Message deduplication"]
+        end
+    end
+    Client -->|HTTPS| API["Slack Web API<br/>(HTTPS)"]
 ```
 
 ## Usage

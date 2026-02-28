@@ -12,25 +12,17 @@ A complete implementation of WebRTC chat interface. Establishes WebRTC P2P conne
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────┐
-│           WebRtcChatInterface (C#)               │
-│  ┌────────────────────────────────────────────┐  │
-│  │  WebRtcNativeClient (P/Invoke wrapper)     │  │
-│  │  - Event polling thread                    │  │
-│  │  - Message serialization                   │  │
-│  └────────────────────────────────────────────┘  │
-│                      │ P/Invoke                  │
-│                      ▼                           │
-│  ┌────────────────────────────────────────────┐  │
-│  │  webrtc_client.dll (Rust cdylib)           │  │
-│  └────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────┘
-                       │
-           ┌───────────────────────┐
-           │   SignalR Server      │
-           │   (Signaling)         │
-           └───────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Interface["WebRtcChatInterface (C#)"]
+        subgraph Native["WebRtcNativeClient (P/Invoke wrapper)"]
+            Poll["Event polling thread"]
+            Ser["Message serialization"]
+        end
+        DLL["webrtc_client.dll<br/>(Rust cdylib)"]
+    end
+    Native -->|P/Invoke| DLL
+    DLL --> SignalR["SignalR Server<br/>(Signaling)"]
 ```
 
 ## Building Native Library

@@ -48,23 +48,23 @@ Clawleash supports multiple input interfaces simultaneously.
 | **WebRTC** | P2P communication via DataChannel | ✅ DTLS-SRTP |
 
 **Architecture:**
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       Clawleash (Main Application)                   │
-│  ┌─────────────────────────────────────────────────────────────────┐ │
-│  │     InterfaceLoader + FileSystemWatcher (Hot Reload)            │ │
-│  │  %LocalAppData%\Clawleash\Interfaces\ monitored                  │ │
-│  │  New DLL → Auto-load → Register with ChatInterfaceManager       │ │
-│  └──────────────────────────┬──────────────────────────────────────┘ │
-│                             │                                        │
-│  ┌──────────────────────────┴──────────────────────────────────────┐ │
-│  │                   ChatInterfaceManager                           │ │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │ │
-│  │  │   CLI    │ │ Discord  │ │  Slack   │ │ WebSocket│ │ WebRTC │ │ │
-│  │  │(Built-in)│ │  (DLL)   │ │  (DLL)   │ │  (DLL)   │ │ (DLL)  │ │ │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │ │
-│  └───────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────┘
+
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main Application)"]
+        subgraph IL["InterfaceLoader + FileSystemWatcher (Hot Reload)"]
+            D1["%LocalAppData%\Clawleash\Interfaces\ monitored"]
+            D2["New DLL → Auto-load → Register with ChatInterfaceManager"]
+        end
+        subgraph CIM["ChatInterfaceManager"]
+            CLI["CLI<br/>(Built-in)"]
+            DISC["Discord<br/>(DLL)"]
+            SLK["Slack<br/>(DLL)"]
+            WS["WebSocket<br/>(DLL)"]
+            WRTC["WebRTC<br/>(DLL)"]
+        end
+        IL --> CIM
+    end
 ```
 
 **Configuration Example (appsettings.json):**
@@ -101,25 +101,18 @@ Clawleash supports multiple input interfaces simultaneously.
 
 Enable E2EE for WebSocket and WebRTC communications.
 
-```
-┌──────────────┐                      ┌──────────────┐
-│   Client     │                      │    Server    │
-│              │                      │              │
-│  1. Exchange │ ◄─── X25519 ────────► │              │
-│              │                      │              │
-│  2. Encrypt  │                      │              │
-│  Plaintext   │                      │              │
-│     │        │                      │              │
-│     ▼        │                      │              │
-│  AES-256-GCM │                      │              │
-│     │        │                      │              │
-│     ▼        │                      │              │
-│  Ciphertext  │ ──── wss:// ────────► │  3. Decrypt  │
-│              │                      │  AES-256-GCM │
-│              │                      │     │        │
-│              │                      │     ▼        │
-│              │                      │  Plaintext   │
-└──────────────┘                      └──────────────┘
+```mermaid
+flowchart LR
+    subgraph Client["Client"]
+        KX1["1. Key Exchange<br/>X25519"]
+        ENC["2. Encrypt<br/>Plaintext → AES-256-GCM → Ciphertext"]
+    end
+    subgraph Server["Server"]
+        KX2["Key Exchange"]
+        DEC["3. Decrypt<br/>AES-256-GCM → Plaintext"]
+    end
+    KX1 <-.->|X25519| KX2
+    ENC -->|wss://| DEC
 ```
 
 ### Web Crawler (Firecrawl-style)
@@ -349,46 +342,42 @@ services.AddSilentApprovalHandler(config);
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Clawleash (Main)                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Kernel    │  │ ToolLoader  │  │   ShellServer       │  │
-│  │  (AI Agent) │  │ (ZIP/DLL)   │  │   (ZeroMQ Router)   │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         │                │                     │ IPC         │
-│         ├────────────────┼─────────────────────┤             │
-│         │  SkillLoader   │   McpClientManager  │             │
-│         │  (YAML/JSON)   │   (stdio/SSE)       │             │
-│         └────────────────┴─────────────────────┘             │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              ChatInterfaceManager                        │ │
-│  │  ┌─────┐ ┌─────────┐ ┌────────┐ ┌──────────┐ ┌───────┐  │ │
-│  │  │ CLI │ │ Discord │ │ Slack  │ │ WebSocket│ │ WebRTC│  │ │
-│  │  └─────┘ └─────────┘ └────────┘ └──────────┘ └───────┘  │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼ MessagePack over ZeroMQ
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash.Shell (Sandboxed)               │
-│  ┌─────────────┐  ┌─────────────────────────────────────┐   │
-│  │  IpcClient  │  │     ConstrainedRunspaceHost         │   │
-│  │  (Dealer)   │  │     (PowerShell SDK)                │   │
-│  └─────────────┘  └─────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main)"]
+        Kernel["Kernel<br/>(AI Agent)"]
+        ToolLoader["ToolLoader<br/>(ZIP/DLL)"]
+        ShellServer["ShellServer<br/>(ZeroMQ Router)"]
+        SkillLoader["SkillLoader<br/>(YAML/JSON)"]
+        McpClient["McpClientManager<br/>(stdio/SSE)"]
+        subgraph CIM["ChatInterfaceManager"]
+            CLI["CLI"]
+            DISC["Discord"]
+            SLK["Slack"]
+            WS["WebSocket"]
+            WRTC["WebRTC"]
+        end
+    end
+    Kernel --> SkillLoader
+    Kernel --> ToolLoader
+    Kernel --> McpClient
+    Kernel --> CIM
+    ToolLoader --> ShellServer
 
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash.Server (Optional)               │
-│  ┌─────────────────────┐  ┌─────────────────────────────┐   │
-│  │     ChatHub         │  │     SignalingHub            │   │
-│  │  (WebSocket/E2EE)   │  │  (WebRTC Signaling)         │   │
-│  └─────────────────────┘  └─────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │     Svelte Client (Static Files)                        │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+    subgraph Shell["Clawleash.Shell (Sandboxed)"]
+        IpcClient["IpcClient<br/>(Dealer)"]
+        Runspace["ConstrainedRunspaceHost<br/>(PowerShell SDK)"]
+    end
+    ShellServer <-.->|MessagePack over ZeroMQ| IpcClient
+    IpcClient --> Runspace
+
+    subgraph Server["Clawleash.Server (Optional)"]
+        ChatHub["ChatHub<br/>(WebSocket/E2EE)"]
+        Signaling["SignalingHub<br/>(WebRTC Signaling)"]
+        Svelte["Svelte Client (Static Files)"]
+    end
+    WS --> ChatHub
+    WRTC --> Signaling
 ```
 
 ## Project Structure
@@ -629,51 +618,30 @@ Communication between Main and Shell processes uses ZeroMQ + MessagePack.
 
 ### Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Main Process                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              RouterSocket (Server)                       │ │
-│  │  - Bind to random port                                   │ │
-│  │  - Multiple client connections supported                 │ │
-│  │  - Client identification via Identity                    │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                    ZeroMQ (TCP)
-                            │
-┌─────────────────────────────────────────────────────────────┐
-│                   Shell Process (Sandboxed)                  │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              DealerSocket (Client)                       │ │
-│  │  - Dynamically assigned Identity                         │ │
-│  │  - Async request/response                                │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Main["Main Process"]
+        Router["RouterSocket (Server)<br/>- Bind to random port<br/>- Multiple client connections supported<br/>- Client identification via Identity"]
+    end
+    subgraph Shell["Shell Process (Sandboxed)"]
+        Dealer["DealerSocket (Client)<br/>- Dynamically assigned Identity<br/>- Async request/response"]
+    end
+    Router <-.->|ZeroMQ TCP| Dealer
 ```
 
 ### Connection Flow
 
-```
-Main                                Shell
-  │                                   │
-  │  1. RouterSocket.BindRandomPort  │
-  │     (e.g., tcp://127.0.0.1:5555) │
-  │                                   │
-  │                     2. Process start --server "tcp://..."
-  │                                   │
-  │                     3. DealerSocket.Connect()
-  │                                   │
-  │  ◄─────── ShellReadyMessage ───── │
-  │     (ProcessId, Runtime, OS)     │
-  │                                   │
-  │  ──── ShellInitializeRequest ────►│
-  │     (AllowedCommands, Paths)     │
-  │                                   │
-  │  ◄─── ShellInitializeResponse ───│
-  │     (Success, Version)           │
-  │                                   │
-  │         Ready                     │
+```mermaid
+sequenceDiagram
+    participant Main
+    participant Shell
+    Main->>Main: 1. RouterSocket.BindRandomPort<br/>(e.g., tcp://127.0.0.1:5555)
+    Main->>Shell: 2. Process start --server "tcp://..."
+    Shell->>Shell: 3. DealerSocket.Connect()
+    Shell->>Main: ShellReadyMessage<br/>(ProcessId, Runtime, OS)
+    Main->>Shell: ShellInitializeRequest<br/>(AllowedCommands, Paths)
+    Shell->>Main: ShellInitializeResponse<br/>(Success, Version)
+    Note over Main,Shell: Ready
 ```
 
 ### Message Types
@@ -1026,35 +994,29 @@ Tools are executed in a sandboxed environment for security.
 
 **Architecture:**
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Clawleash (Main Process)                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Kernel    │  │ ToolLoader  │  │   ShellServer       │  │
-│  │  (AI Agent) │  │ (ZIP/DLL)   │  │   (ZeroMQ Router)   │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         │                │                     │ IPC           │
-└─────────┼────────────────┼─────────────────────┼─────────────┘
-          │                │                     │
-          │  ┌─────────────┴─────────────────────┘
-          │  │
-          ▼  ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  Clawleash.Shell (Sandboxed Process)         │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │           AppContainer (Windows) / Bubblewrap (Linux)    │ │
-│  │  - File system access control                            │ │
-│  │  - Network access control                                │ │
-│  │  - Process execution control                              │ │
-│  │  - Folder policy enforcement                              │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │  AssemblyLoadContext (isCollectible: true)               │ │
-│  │  - Tool DLLs loaded in isolated context                  │ │
-│  │  - Can be unloaded when tool is removed                  │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main Process)"]
+        Kernel["Kernel<br/>(AI Agent)"]
+        ToolLoader["ToolLoader<br/>(ZIP/DLL)"]
+        ShellServer["ShellServer<br/>(ZeroMQ Router)"]
+    end
+    Kernel --> ToolLoader
+    Kernel --> ShellServer
+
+    subgraph Shell["Clawleash.Shell (Sandboxed Process)"]
+        subgraph Sandbox["AppContainer (Windows) / Bubblewrap (Linux)"]
+            ACL["- File system access control"]
+            NET["- Network access control"]
+            EXEC["- Process execution control"]
+            POL["- Folder policy enforcement"]
+        end
+        subgraph ALC["AssemblyLoadContext (isCollectible: true)"]
+            DLL1["Tool DLLs<br/>(isolated context)"]
+            DLL2["Can be unloaded<br/>when tool is removed"]
+        end
+    end
+    ShellServer <-.->|IPC| ALC
 ```
 
 **Execution Flow:**

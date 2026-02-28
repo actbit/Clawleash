@@ -12,33 +12,22 @@ Clawleash.Shell operates as an isolated process with the following responsibilit
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Clawleash (Main)                        │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              ShellServer (RouterSocket)                  │ │
-│  └──────────────────────────┬──────────────────────────────┘ │
-└─────────────────────────────┼───────────────────────────────┘
-                              │
-                              │ ZeroMQ + MessagePack
-                              │
-┌─────────────────────────────┼───────────────────────────────┐
-│                    Clawleash.Shell (Sandboxed)               │
-│  ┌──────────────────────────┴──────────────────────────────┐ │
-│  │               IpcClient (DealerSocket)                   │ │
-│  └──────────────────────────┬──────────────────────────────┘ │
-│                             │                                │
-│  ┌──────────────────────────┴──────────────────────────────┐ │
-│  │          ConstrainedRunspaceHost                         │ │
-│  │          (PowerShell SDK)                                │ │
-│  │  ┌─────────────────────────────────────────────────────┐ │ │
-│  │  │  ConstrainedLanguage Mode                           │ │ │
-│  │  │  - Command Whitelist                                │ │ │
-│  │  │  - Path Restrictions                                │ │ │
-│  │  │  - Folder Policies                                  │ │ │
-│  │  └─────────────────────────────────────────────────────┘ │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Main["Clawleash (Main)"]
+        Server["ShellServer<br/>(RouterSocket)"]
+    end
+    subgraph Shell["Clawleash.Shell (Sandboxed)"]
+        Client["IpcClient<br/>(DealerSocket)"]
+        subgraph Runspace["ConstrainedRunspaceHost (PowerShell SDK)"]
+            Mode["ConstrainedLanguage Mode"]
+            Whitelist["- Command Whitelist"]
+            Path["- Path Restrictions"]
+            Policy["- Folder Policies"]
+        end
+    end
+    Server <-.->|ZeroMQ + MessagePack| Client
+    Client --> Runspace
 ```
 
 ## Usage
