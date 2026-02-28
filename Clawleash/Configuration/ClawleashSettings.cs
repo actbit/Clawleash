@@ -112,6 +112,12 @@ public class ChatInterfaceSettings
     public bool EnableHotReload { get; set; } = true;
 
     /// <summary>
+    /// 返信を全インターフェースにブロードキャストするか
+    /// falseの場合は送信元のみに返信
+    /// </summary>
+    public bool BroadcastReplies { get; set; } = false;
+
+    /// <summary>
     /// Discord設定
     /// </summary>
     public DiscordInterfaceSettings Discord { get; set; } = new();

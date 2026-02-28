@@ -28,6 +28,7 @@ public class WebRtcChatInterface : IChatInterface
     // Lucid.Rtc high-level API
     private RtcConnection? _rtcConnection;
     private readonly ConcurrentDictionary<string, Peer> _peers = new();
+    private bool _nativeClientAvailable;
 
     // 接続状態
     private int _activeConnections;
@@ -59,8 +60,16 @@ public class WebRtcChatInterface : IChatInterface
 
         try
         {
-            // Initialize Lucid.Rtc connection
-            InitializeRtcConnection();
+            // Initialize Lucid.Rtc connection (if native client is enabled)
+            if (_settings.TryUseNativeClient)
+            {
+                InitializeRtcConnection();
+            }
+            else
+            {
+                _logger?.LogInformation("Native WebRTC client disabled, using simulation mode");
+                _nativeClientAvailable = false;
+            }
 
             // SignalRハブ接続を構築
             _hubConnection = new HubConnectionBuilder()
@@ -105,8 +114,9 @@ public class WebRtcChatInterface : IChatInterface
             // 既存のピアを取得して接続開始
             await DiscoverAndConnectPeersAsync();
 
-            _logger?.LogInformation("WebRTC interface started. E2EE: {E2ee}, Backend: Lucid.Rtc",
-                _settings.EnableE2ee ? "Enabled" : "Disabled");
+            _logger?.LogInformation("WebRTC interface started. E2EE: {E2ee}, Mode: {Mode}",
+                _settings.EnableE2ee ? "Enabled" : "Disabled",
+                _nativeClientAvailable ? "Native (Lucid.Rtc)" : "SignalR (Fallback)");
         }
         catch (Exception ex)
         {
@@ -117,43 +127,59 @@ public class WebRtcChatInterface : IChatInterface
 
     private void InitializeRtcConnection()
     {
-        var builder = new RtcConnectionBuilder();
-
-        // STUN servers
-        foreach (var stunServer in _settings.StunServers)
+        try
         {
-            builder.WithStunServer(stunServer);
-        }
+            var builder = new RtcConnectionBuilder();
 
-        // TURN server (optional)
-        if (!string.IsNullOrEmpty(_settings.TurnServerUrl))
+            // STUN servers
+            foreach (var stunServer in _settings.StunServers)
+            {
+                builder.WithStunServer(stunServer);
+            }
+
+            // TURN server (optional)
+            if (!string.IsNullOrEmpty(_settings.TurnServerUrl))
+            {
+                builder.WithTurnServer(
+                    _settings.TurnServerUrl,
+                    _settings.TurnUsername ?? "",
+                    _settings.TurnPassword ?? "");
+            }
+
+            // Other settings
+            builder
+                .WithIceConnectionTimeout(_settings.IceConnectionTimeoutMs)
+                .WithDataChannelReliable(_settings.DataChannelReliable);
+
+            _rtcConnection = builder.Build();
+
+            // Register event handlers with method chaining
+            _rtcConnection
+                .On<Lucid.Rtc.PeerConnectedEvent>(e => OnPeerConnected(e.PeerId, e.Peer))
+                .On<Lucid.Rtc.PeerDisconnectedEvent>(e => OnPeerDisconnected(e.PeerId))
+                .On<Lucid.Rtc.MessageReceivedEvent>(e => HandleMessage(e.PeerId, e.Data))
+                .On<Lucid.Rtc.IceCandidateEvent>(e => SendIceCandidate(e.PeerId, e.Candidate))
+                .On<Lucid.Rtc.OfferReadyEvent>(e => SendOffer(e.PeerId, e.Sdp))
+                .On<Lucid.Rtc.AnswerReadyEvent>(e => SendAnswer(e.PeerId, e.Sdp))
+                .On<Lucid.Rtc.DataChannelOpenEvent>(e => OnDataChannelOpen(e.PeerId, e.Peer))
+                .On<Lucid.Rtc.DataChannelClosedEvent>(e => OnDataChannelClosed(e.PeerId, e.Peer))
+                .On<Lucid.Rtc.ErrorEvent>(e => _logger?.LogError("Lucid.Rtc error: {Message}", e.Message));
+
+            _nativeClientAvailable = true;
+            _logger?.LogInformation("Lucid.Rtc connection initialized");
+        }
+        catch (DllNotFoundException ex)
         {
-            builder.WithTurnServer(
-                _settings.TurnServerUrl,
-                _settings.TurnUsername ?? "",
-                _settings.TurnPassword ?? "");
+            _logger?.LogWarning(ex, "Native WebRTC library not found, falling back to SignalR mode");
+            _nativeClientAvailable = false;
+            _rtcConnection = null;
         }
-
-        // Other settings
-        builder
-            .WithIceConnectionTimeout(_settings.IceConnectionTimeoutMs)
-            .WithDataChannelReliable(_settings.DataChannelReliable);
-
-        _rtcConnection = builder.Build();
-
-        // Register event handlers with method chaining
-        _rtcConnection
-            .On<Lucid.Rtc.PeerConnectedEvent>(e => OnPeerConnected(e.PeerId, e.Peer))
-            .On<Lucid.Rtc.PeerDisconnectedEvent>(e => OnPeerDisconnected(e.PeerId))
-            .On<Lucid.Rtc.MessageReceivedEvent>(e => HandleMessage(e.PeerId, e.Data))
-            .On<Lucid.Rtc.IceCandidateEvent>(e => SendIceCandidate(e.PeerId, e.Candidate))
-            .On<Lucid.Rtc.OfferReadyEvent>(e => SendOffer(e.PeerId, e.Sdp))
-            .On<Lucid.Rtc.AnswerReadyEvent>(e => SendAnswer(e.PeerId, e.Sdp))
-            .On<Lucid.Rtc.DataChannelOpenEvent>(e => OnDataChannelOpen(e.PeerId, e.Peer))
-            .On<Lucid.Rtc.DataChannelClosedEvent>(e => OnDataChannelClosed(e.PeerId, e.Peer))
-            .On<Lucid.Rtc.ErrorEvent>(e => _logger?.LogError("Lucid.Rtc error: {Message}", e.Message));
-
-        _logger?.LogInformation("Lucid.Rtc connection initialized");
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to initialize native WebRTC, falling back to SignalR mode");
+            _nativeClientAvailable = false;
+            _rtcConnection = null;
+        }
     }
 
     private void OnPeerConnected(string peerId, Peer peer)
@@ -380,6 +406,16 @@ public class WebRtcChatInterface : IChatInterface
         _hubConnection!.On<E2eeKeyExchangeEvent>("e2ee-key-exchange", async data =>
         {
             await HandleE2eeKeyExchangeAsync(data.FromPeerId, data.SessionId, data.PublicKey);
+        });
+
+        // DataChannelメッセージ受信（SignalRフォールバック用）
+        _hubConnection!.On<DataChannelMessageEvent>("datachannel-message", async data =>
+        {
+            // ネイティブクライアントが利用できない場合のみ処理
+            if (!_nativeClientAvailable)
+            {
+                await HandleDataChannelMessageAsync(data.FromPeerId, Convert.FromBase64String(data.Payload));
+            }
         });
     }
 
@@ -690,7 +726,7 @@ public class WebRtcChatInterface : IChatInterface
     public async Task SendMessageAsync(string message, string? replyToMessageId = null,
         CancellationToken cancellationToken = default)
     {
-        if (_rtcConnection == null || string.IsNullOrEmpty(_localPeerId))
+        if (_hubConnection == null || string.IsNullOrEmpty(_localPeerId))
         {
             _logger?.LogWarning("WebRTC not connected");
             return;
@@ -707,33 +743,70 @@ public class WebRtcChatInterface : IChatInterface
             payload = Encoding.UTF8.GetBytes(message);
         }
 
-        // 特定のピアに送信（返信の場合）
-        if (!string.IsNullOrEmpty(replyToMessageId) && _channelTracking.TryGetValue(replyToMessageId, out var targetPeerId))
+        // ネイティブクライアントが利用可能な場合はLucid.Rtcを使用
+        if (_nativeClientAvailable && _rtcConnection != null)
         {
-            if (_peers.TryGetValue(targetPeerId, out var peer))
+            // 特定のピアに送信（返信の場合）
+            if (!string.IsNullOrEmpty(replyToMessageId) && _channelTracking.TryGetValue(replyToMessageId, out var targetPeerId))
             {
+                if (_peers.TryGetValue(targetPeerId, out var peer))
+                {
+                    try
+                    {
+                        peer.Send(payload);
+                        _logger?.LogDebug("Sent message to peer {PeerId} via native", targetPeerId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to send message to peer {PeerId}", targetPeerId);
+                    }
+                }
+            }
+            else
+            {
+                // 全ピアにブロードキャスト
                 try
                 {
-                    peer.Send(payload);
-                    _logger?.LogDebug("Sent message to peer {PeerId}", targetPeerId);
+                    _rtcConnection.Broadcast(payload);
+                    _logger?.LogDebug("Broadcast message to all peers via native");
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogWarning(ex, "Failed to send message to peer {PeerId}", targetPeerId);
+                    _logger?.LogWarning(ex, "Failed to broadcast message");
                 }
             }
         }
         else
         {
-            // 全ピアにブロードキャスト
-            try
+            // SignalRフォールバックモード
+            var payloadBase64 = Convert.ToBase64String(payload);
+
+            if (!string.IsNullOrEmpty(replyToMessageId) && _channelTracking.TryGetValue(replyToMessageId, out var targetPeerId))
             {
-                _rtcConnection.Broadcast(payload);
-                _logger?.LogDebug("Broadcast message to all peers");
+                try
+                {
+                    await _hubConnection.InvokeAsync("SendDataChannelMessage", targetPeerId, payloadBase64, cancellationToken);
+                    _logger?.LogDebug("Sent message to peer {PeerId} via SignalR", targetPeerId);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to send message to peer {PeerId} via SignalR", targetPeerId);
+                }
             }
-            catch (Exception ex)
+            else
             {
-                _logger?.LogWarning(ex, "Failed to broadcast message");
+                // 全ピアに送信
+                foreach (var peerId in _peers.Keys)
+                {
+                    try
+                    {
+                        await _hubConnection.InvokeAsync("SendDataChannelMessage", peerId, payloadBase64, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to send message to peer {PeerId} via SignalR", peerId);
+                    }
+                }
             }
         }
     }
@@ -874,4 +947,10 @@ internal class E2eeKeyExchangeEvent
     public string FromPeerId { get; set; } = string.Empty;
     public string SessionId { get; set; } = string.Empty;
     public string PublicKey { get; set; } = string.Empty;
+}
+
+internal class DataChannelMessageEvent
+{
+    public string FromPeerId { get; set; } = string.Empty;
+    public string Payload { get; set; } = string.Empty;
 }

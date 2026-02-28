@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Clawleash.Sandbox;
@@ -22,10 +25,19 @@ public class McpToolInfo
 public class ConnectedServer
 {
     public McpServerConfig Config { get; set; } = null!;
+
+    // stdio用
     public Process? Process { get; set; }
     public StreamWriter? StdIn { get; set; }
     public StreamReader? StdOut { get; set; }
     public StreamReader? StdErr { get; set; }
+
+    // SSE用
+    public HttpClient? HttpClient { get; set; }
+    public CancellationTokenSource? SseCts { get; set; }
+    public Task? SseListenerTask { get; set; }
+    public ConcurrentDictionary<int, TaskCompletionSource<JsonElement?>> PendingRequests { get; } = new();
+
     public List<McpToolInfo> Tools { get; set; } = new();
     public bool IsConnected { get; set; }
     public int RequestId { get; set; }
@@ -213,9 +225,9 @@ public class McpClientManager : IDisposable
     }
 
     /// <summary>
-    /// SSE トランスポートで接続（プレースホルダー）
+    /// SSE トランスポートで接続
     /// </summary>
-    private Task ConnectSseAsync(ConnectedServer server)
+    private async Task ConnectSseAsync(ConnectedServer server)
     {
         var config = server.Config;
 
@@ -225,8 +237,221 @@ public class McpClientManager : IDisposable
         }
 
         _logger.LogInformation("SSE接続: {Url}", config.Url);
-        // TODO: HttpClient + SSE実装
-        throw new NotImplementedException("SSE接続は今後実装予定です");
+
+        // HttpClientを作成
+        var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate
+        };
+
+        server.HttpClient = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromMilliseconds(config.TimeoutMs)
+        };
+
+        // カスタムヘッダーを設定
+        if (config.Headers != null)
+        {
+            foreach (var (key, value) in config.Headers)
+            {
+                server.HttpClient.DefaultRequestHeaders.Add(key, value);
+            }
+        }
+
+        // SSEストリームを開始
+        server.SseCts = new CancellationTokenSource();
+        server.SseListenerTask = Task.Run(() => ListenToSseStreamAsync(server), server.SseCts.Token);
+
+        // SSE接続が確立されるまで少し待機
+        await Task.Delay(100);
+
+        _logger.LogInformation("SSE接続確立: {Url}", config.Url);
+    }
+
+    /// <summary>
+    /// SSEストリームをリッスン
+    /// </summary>
+    private async Task ListenToSseStreamAsync(ConnectedServer server)
+    {
+        var baseUrl = server.Config.Url!.TrimEnd('/');
+        var sseUrl = $"{baseUrl}/sse";
+
+        _logger.LogDebug("SSEストリーム開始: {Url}", sseUrl);
+
+        while (server.SseCts?.Token.IsCancellationRequested == false)
+        {
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, sseUrl);
+                request.Headers.Add("Accept", "text/event-stream");
+
+                using var response = await server.HttpClient!.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    server.SseCts.Token);
+
+                response.EnsureSuccessStatusCode();
+
+                using var stream = await response.Content.ReadAsStreamAsync(server.SseCts.Token);
+                using var reader = new StreamReader(stream);
+
+                string? eventType = null;
+                var dataBuilder = new StringBuilder();
+
+                while (server.SseCts.Token.IsCancellationRequested == false)
+                {
+                    var line = await reader.ReadLineAsync(server.SseCts.Token);
+
+                    if (line == null)
+                        break;
+
+                    if (line.StartsWith("event:"))
+                    {
+                        eventType = line[6..].Trim();
+                    }
+                    else if (line.StartsWith("data:"))
+                    {
+                        dataBuilder.AppendLine(line[5..].Trim());
+                    }
+                    else if (string.IsNullOrEmpty(line))
+                    {
+                        // 空行 = イベント終了
+                        if (dataBuilder.Length > 0)
+                        {
+                            await ProcessSseEventAsync(server, eventType, dataBuilder.ToString());
+                        }
+                        eventType = null;
+                        dataBuilder.Clear();
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "SSEストリームエラー、再接続中...");
+
+                if (server.SseCts.Token.IsCancellationRequested)
+                    break;
+
+                await Task.Delay(1000, server.SseCts.Token);
+            }
+        }
+
+        _logger.LogDebug("SSEストリーム終了: {Name}", server.Config.Name);
+    }
+
+    /// <summary>
+    /// SSEイベントを処理
+    /// </summary>
+    private Task ProcessSseEventAsync(ConnectedServer server, string? eventType, string data)
+    {
+        _logger.LogDebug("SSEイベント受信: type={Type}, data={Data}", eventType, data[..Math.Min(100, data.Length)]);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(data.Trim());
+            var root = doc.RootElement;
+
+            // JSON-RPCレスポンスの場合
+            if (root.TryGetProperty("id", out var idElement))
+            {
+                var id = idElement.GetInt32();
+
+                if (server.PendingRequests.TryRemove(id, out var tcs))
+                {
+                    if (root.TryGetProperty("error", out var error))
+                    {
+                        var message = error.TryGetProperty("message", out var msg)
+                            ? msg.GetString()
+                            : "Unknown error";
+                        _logger.LogError("MCP SSEエラー: {Message}", message);
+                        tcs.TrySetResult(null);
+                    }
+                    else if (root.TryGetProperty("result", out var result))
+                    {
+                        var resultJson = result.GetRawText();
+                        tcs.TrySetResult(JsonDocument.Parse(resultJson).RootElement);
+                    }
+                    else
+                    {
+                        tcs.TrySetResult(null);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SSEイベント解析エラー");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// SSE経由でJSON-RPCリクエストを送信
+    /// </summary>
+    private async Task<JsonElement?> SendSseRequestAsync(ConnectedServer server, string method, object? parameters = null)
+    {
+        if (server.HttpClient == null)
+        {
+            return null;
+        }
+
+        var requestId = ++server.RequestId;
+        var request = new
+        {
+            jsonrpc = "2.0",
+            id = requestId,
+            method,
+            @params = parameters
+        };
+
+        var json = JsonSerializer.Serialize(request);
+        _logger.LogDebug("MCP SSE Request: {Json}", json);
+
+        // TaskCompletionSourceを作成して待機
+        var tcs = new TaskCompletionSource<JsonElement?>();
+        server.PendingRequests[requestId] = tcs;
+
+        try
+        {
+            var baseUrl = server.Config.Url!.TrimEnd('/');
+            var messageUrl = $"{baseUrl}/message";
+
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+            var response = await server.HttpClient.PostAsync(messageUrl, content, server.SseCts?.Token ?? CancellationToken.None);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("MCP SSE POST失敗: {Status}", response.StatusCode);
+                server.PendingRequests.TryRemove(requestId, out _);
+                return null;
+            }
+
+            // タイムアウト付きでレスポンスを待機
+            using var cts = new CancellationTokenSource(server.Config.TimeoutMs);
+            var completedTask = await Task.WhenAny(
+                tcs.Task,
+                Task.Delay(server.Config.TimeoutMs, cts.Token));
+
+            if (completedTask != tcs.Task)
+            {
+                _logger.LogError("MCP SSE リクエストがタイムアウト: {Method}", method);
+                server.PendingRequests.TryRemove(requestId, out _);
+                return null;
+            }
+
+            return await tcs.Task;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "MCP SSE リクエストエラー: {Method}", method);
+            server.PendingRequests.TryRemove(requestId, out _);
+            return null;
+        }
     }
 
     /// <summary>
@@ -301,9 +526,23 @@ public class McpClientManager : IDisposable
     }
 
     /// <summary>
-    /// MCPリクエストを送信
+    /// MCPリクエストを送信（トランスポート自動選択）
     /// </summary>
     private async Task<JsonElement?> SendRequestAsync(ConnectedServer server, string method, object? parameters = null)
+    {
+        // トランスポートに応じて適切なメソッドを選択
+        if (server.HttpClient != null)
+        {
+            return await SendSseRequestAsync(server, method, parameters);
+        }
+
+        return await SendStdioRequestAsync(server, method, parameters);
+    }
+
+    /// <summary>
+    /// stdio経由でJSON-RPCリクエストを送信
+    /// </summary>
+    private async Task<JsonElement?> SendStdioRequestAsync(ConnectedServer server, string method, object? parameters = null)
     {
         if (server.StdIn == null || server.StdOut == null)
         {
@@ -464,11 +703,24 @@ public class McpClientManager : IDisposable
     {
         try
         {
+            // stdio クリーンアップ
             server.StdIn?.Close();
             server.StdOut?.Close();
             server.StdErr?.Close();
             server.Process?.Kill(entireProcessTree: true);
             server.Process?.Dispose();
+
+            // SSE クリーンアップ
+            server.SseCts?.Cancel();
+            server.SseCts?.Dispose();
+            server.HttpClient?.Dispose();
+
+            // 待機中のリクエストをキャンセル
+            foreach (var tcs in server.PendingRequests.Values)
+            {
+                tcs.TrySetCanceled();
+            }
+            server.PendingRequests.Clear();
         }
         catch { }
     }

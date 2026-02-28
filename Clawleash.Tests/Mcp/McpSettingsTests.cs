@@ -3,6 +3,7 @@ using Moq;
 using Microsoft.Extensions.Logging;
 using Clawleash.Mcp;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace Clawleash.Tests.Mcp;
 
@@ -102,6 +103,73 @@ public class McpSettingsTests
         settings.Servers[0].Name.Should().Be("github");
         settings.Servers[1].Name.Should().Be("filesystem");
     }
+
+    [Fact]
+    public void McpServerConfig_Sse_ShouldDeserializeFromJson()
+    {
+        // Arrange
+        var json = @"{
+            ""name"": ""sse-server"",
+            ""transport"": ""sse"",
+            ""url"": ""http://localhost:3000"",
+            ""headers"": {
+                ""Authorization"": ""Bearer token123""
+            },
+            ""enabled"": true,
+            ""timeoutMs"": 45000
+        }";
+
+        // Act
+        var config = JsonSerializer.Deserialize<McpServerConfig>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+
+        // Assert
+        config.Should().NotBeNull();
+        config!.Name.Should().Be("sse-server");
+        config.Transport.Should().Be("sse");
+        config.Url.Should().Be("http://localhost:3000");
+        config.Headers.Should().ContainKey("Authorization");
+        config.Headers!["Authorization"].Should().Be("Bearer token123");
+        config.TimeoutMs.Should().Be(45000);
+    }
+
+    [Fact]
+    public void McpSettings_WithMixedTransports_ShouldDeserializeFromJson()
+    {
+        // Arrange
+        var json = @"{
+            ""enabled"": true,
+            ""servers"": [
+                {
+                    ""name"": ""stdio-tool"",
+                    ""transport"": ""stdio"",
+                    ""command"": ""node"",
+                    ""args"": [""server.js""]
+                },
+                {
+                    ""name"": ""sse-tool"",
+                    ""transport"": ""sse"",
+                    ""url"": ""http://api.example.com/mcp""
+                }
+            ]
+        }";
+
+        // Act
+        var settings = JsonSerializer.Deserialize<McpSettings>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        });
+
+        // Assert
+        settings.Should().NotBeNull();
+        settings!.Servers.Should().HaveCount(2);
+        settings.Servers[0].Transport.Should().Be("stdio");
+        settings.Servers[0].Command.Should().Be("node");
+        settings.Servers[1].Transport.Should().Be("sse");
+        settings.Servers[1].Url.Should().Be("http://api.example.com/mcp");
+    }
 }
 
 public class McpToolInfoTests
@@ -128,14 +196,42 @@ public class ConnectedServerTests
         // Arrange & Act
         var server = new ConnectedServer();
 
-        // Assert
+        // Assert - stdio fields
         server.Process.Should().BeNull();
         server.StdIn.Should().BeNull();
         server.StdOut.Should().BeNull();
         server.StdErr.Should().BeNull();
+
+        // Assert - SSE fields
+        server.HttpClient.Should().BeNull();
+        server.SseCts.Should().BeNull();
+        server.SseListenerTask.Should().BeNull();
+        server.PendingRequests.Should().BeEmpty();
+
+        // Assert - common fields
         server.Tools.Should().BeEmpty();
         server.IsConnected.Should().BeFalse();
         server.RequestId.Should().Be(0);
+    }
+
+    [Fact]
+    public void ConnectedServer_PendingRequests_ShouldBeThreadSafe()
+    {
+        // Arrange
+        var server = new ConnectedServer();
+        var tcs = new TaskCompletionSource<JsonElement?>();
+
+        // Act
+        server.PendingRequests[1] = tcs;
+        var exists = server.PendingRequests.TryGetValue(1, out var retrieved);
+        var removed = server.PendingRequests.TryRemove(1, out _);
+
+        // Assert
+        exists.Should().BeTrue();
+        removed.Should().BeTrue();
+        // retrieved and tcs should be the same reference
+        (retrieved == tcs).Should().BeTrue("retrieved should be the same instance as tcs");
+        server.PendingRequests.Should().BeEmpty();
     }
 }
 

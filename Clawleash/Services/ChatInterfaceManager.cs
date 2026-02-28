@@ -4,6 +4,18 @@ using Microsoft.Extensions.Logging;
 namespace Clawleash.Services;
 
 /// <summary>
+/// ChatInterfaceManagerの設定
+/// </summary>
+public class ChatInterfaceManagerSettings
+{
+    /// <summary>
+    /// 返信を全インターフェースにブロードキャストするかどうか
+    /// falseの場合は送信元のみに返信
+    /// </summary>
+    public bool BroadcastReplies { get; set; } = false;
+}
+
+/// <summary>
 /// チャットインターフェースを管理するサービス
 /// 複数のインターフェースを統合し、メッセージをエージェントに振り分ける
 /// プラグインDLLからの動的追加/削除に対応
@@ -13,6 +25,7 @@ public class ChatInterfaceManager : IAsyncDisposable
     private readonly List<IChatInterface> _interfaces = new();
     private readonly Func<ChatMessageReceivedEventArgs, Task<string>> _messageHandler;
     private readonly ILogger<ChatInterfaceManager>? _logger;
+    private readonly ChatInterfaceManagerSettings _settings;
     private readonly object _lock = new();
     private bool _disposed;
 
@@ -46,9 +59,11 @@ public class ChatInterfaceManager : IAsyncDisposable
 
     public ChatInterfaceManager(
         Func<ChatMessageReceivedEventArgs, Task<string>> messageHandler,
+        ChatInterfaceManagerSettings? settings = null,
         ILogger<ChatInterfaceManager>? logger = null)
     {
         _messageHandler = messageHandler ?? throw new ArgumentNullException(nameof(messageHandler));
+        _settings = settings ?? new ChatInterfaceManagerSettings();
         _logger = logger;
     }
 
@@ -227,17 +242,31 @@ public class ChatInterfaceManager : IAsyncDisposable
             // エージェントにメッセージを処理させる
             var response = await _messageHandler(e);
 
-            // 必要に応じて返信
-            if (e.RequiresReply && sender is IChatInterface iface)
+            // 返信の送信先を決定
+            if (e.RequiresReply)
             {
-                await iface.SendMessageAsync(response, e.MessageId);
+                if (_settings.BroadcastReplies)
+                {
+                    // 全インターフェースにブロードキャスト
+                    await BroadcastMessageAsync(response, e.MessageId);
+                }
+                else if (sender is IChatInterface iface)
+                {
+                    // 送信元のみに返信
+                    await iface.SendMessageAsync(response, e.MessageId);
+                }
             }
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Error processing message from {InterfaceName}", e.InterfaceName);
 
-            if (sender is IChatInterface iface)
+            // エラー通知の送信先を決定
+            if (_settings.BroadcastReplies)
+            {
+                await BroadcastMessageAsync($"エラーが発生しました: {ex.Message}", e.MessageId);
+            }
+            else if (sender is IChatInterface iface)
             {
                 try
                 {
@@ -249,6 +278,41 @@ public class ChatInterfaceManager : IAsyncDisposable
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// 全インターフェースにメッセージをブロードキャスト
+    /// </summary>
+    public async Task BroadcastMessageAsync(string message, string? replyToMessageId = null)
+    {
+        List<IChatInterface> interfacesToBroadcast;
+
+        lock (_lock)
+        {
+            interfacesToBroadcast = _interfaces.Where(i => i.IsConnected).ToList();
+        }
+
+        if (interfacesToBroadcast.Count == 0)
+        {
+            _logger?.LogWarning("No connected interfaces to broadcast message");
+            return;
+        }
+
+        _logger?.LogDebug("Broadcasting message to {Count} interfaces", interfacesToBroadcast.Count);
+
+        var tasks = interfacesToBroadcast.Select(async iface =>
+        {
+            try
+            {
+                await iface.SendMessageAsync(message, replyToMessageId);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to send message to interface {Name}", iface.Name);
+            }
+        });
+
+        await Task.WhenAll(tasks);
     }
 
     public async ValueTask DisposeAsync()
