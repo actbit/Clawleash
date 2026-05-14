@@ -106,15 +106,22 @@ public class SilentApprovalHandler : IApprovalHandler
         // カスタムルールを評価
         foreach (var rule in _settings.CustomRules)
         {
-            if (rule.Condition(request))
+            try
             {
-                _logger.LogDebug("カスタムルールに一致: {RuleName}", rule.Name);
-                return Task.FromResult(new ApprovalResult
+                if (rule.Condition(request))
                 {
-                    Approved = rule.Approve,
-                    Action = rule.Action,
-                    Comment = $"ルール '{rule.Name}' により{(rule.Approve ? "許可" : "拒否")}"
-                });
+                    _logger.LogDebug("カスタムルールに一致: {RuleName}", rule.Name);
+                    return Task.FromResult(new ApprovalResult
+                    {
+                        Approved = rule.Approve,
+                        Action = rule.Action,
+                        Comment = $"ルール '{rule.Name}' により{(rule.Approve ? "許可" : "拒否")}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "カスタムルール '{RuleName}' の評価中にエラーが発生しました。ルールをスキップします", rule.Name);
             }
         }
 

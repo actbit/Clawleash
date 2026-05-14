@@ -203,15 +203,17 @@ public class ShellServer : IAsyncDisposable
             // ProcThreadAttributeListのサイズを取得
             var attributeListSize = Sandbox.NativeMethods.GetProcThreadAttributeListSize(1);
             var attributeList = Marshal.AllocHGlobal(attributeListSize);
-            _allocatedMemory.Add(attributeList);
 
             // 属性リストを初期化
             if (!Sandbox.NativeMethods.InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
             {
                 var error = Marshal.GetLastWin32Error();
+                Marshal.FreeHGlobal(attributeList);
                 _logger.LogError("InitializeProcThreadAttributeList failed: {Error}", error);
                 return;
             }
+
+            _allocatedMemory.Add(attributeList);
 
             // SECURITY_CAPABILITIES構造体を設定
             var securityCapabilities = new Sandbox.NativeMethods.SECURITY_CAPABILITIES

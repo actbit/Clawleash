@@ -254,7 +254,9 @@ public class InterfaceLoader : IDisposable
                 // インターフェースを破棄
                 if (iface is IAsyncDisposable asyncDisposable)
                 {
-                    _ = asyncDisposable.DisposeAsync().AsTask();
+                    _ = asyncDisposable.DisposeAsync().AsTask().ContinueWith(
+                        t => _logger?.LogWarning(t.Exception, "Async disposal failed"),
+                        TaskContinuationOptions.OnlyOnFaulted);
                 }
                 else if (iface is IDisposable disposable)
                 {
@@ -293,7 +295,9 @@ public class InterfaceLoader : IDisposable
 
                         if (oldInterface is IAsyncDisposable asyncDisposable)
                         {
-                            _ = asyncDisposable.DisposeAsync().AsTask();
+                            _ = asyncDisposable.DisposeAsync().AsTask().ContinueWith(
+                                t => _logger?.LogWarning(t.Exception, "Async disposal failed"),
+                                TaskContinuationOptions.OnlyOnFaulted);
                         }
                     }
                 }

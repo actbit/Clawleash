@@ -304,31 +304,64 @@ public class PathValidator
     {
         try
         {
-            // URLデコードを試行（エンコードされた攻撃対策）
             var decodedPath = Uri.UnescapeDataString(path);
-
-            // 相対パスを絶対パスに変換
             var fullPath = Path.GetFullPath(decodedPath);
 
-            // Windows: 正規化されたパスを返す
+            fullPath = ResolveSymbolicLinks(fullPath);
+
             if (OperatingSystem.IsWindows())
             {
-                // 拡張長パスプレフィックスを削除して統一
                 if (fullPath.StartsWith(@"\\?\"))
                 {
                     fullPath = fullPath[4..];
                 }
-                return fullPath.TrimEnd(Path.DirectorySeparatorChar);
             }
-            else
-            {
-                // Linux: realpath相当の処理
-                return fullPath.TrimEnd(Path.DirectorySeparatorChar);
-            }
+
+            return fullPath.TrimEnd(Path.DirectorySeparatorChar);
         }
         catch
         {
             return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// シンボリックリンクを再帰的に解決
+    /// </summary>
+    private static string ResolveSymbolicLinks(string path)
+    {
+        try
+        {
+            var resolvedPath = path;
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            const int maxResolveDepth = 20;
+
+            for (var i = 0; i < maxResolveDepth; i++)
+            {
+                if (!visited.Add(resolvedPath))
+                    break;
+
+                FileSystemInfo? fsi = File.Exists(resolvedPath)
+                    ? new FileInfo(resolvedPath)
+                    : Directory.Exists(resolvedPath)
+                        ? new DirectoryInfo(resolvedPath)
+                        : null;
+
+                if (fsi == null)
+                    break;
+
+                var target = fsi.ResolveLinkTarget(true);
+                if (target == null)
+                    break;
+
+                resolvedPath = target.FullName;
+            }
+
+            return resolvedPath;
+        }
+        catch
+        {
+            return path;
         }
     }
 
@@ -381,8 +414,7 @@ public class PathValidator
 
         if (!result.IsAllowed)
         {
-            var allowedList = string.Join(", ", _allowedDirectories);
-            result.ErrorMessage = $"パス '{path}' は許可されたディレクトリ内ではありません。許可: [{allowedList}]";
+            result.ErrorMessage = $"パス '{path}' は許可されたディレクトリ内ではありません。";
         }
 
         return result;

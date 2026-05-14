@@ -280,6 +280,22 @@ public class SlackChatInterface : IChatInterface
         {
             _processedMessages.TryRemove(key, out _);
         }
+
+        // 最大件数制限を超えた場合、古いものから削除
+        const int maxEntries = 10_000;
+        if (_processedMessages.Count > maxEntries)
+        {
+            var oldestKeys = _processedMessages
+                .OrderBy(kvp => kvp.Value)
+                .Take(_processedMessages.Count - maxEntries)
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var key in oldestKeys)
+            {
+                _processedMessages.TryRemove(key, out _);
+            }
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)

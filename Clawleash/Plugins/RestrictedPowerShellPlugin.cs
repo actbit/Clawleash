@@ -68,7 +68,9 @@ public class RestrictedPowerShellPlugin
     public async Task<string> GetEnvironmentVariable(
         [Description("環境変数名")] string name)
     {
-        // セキュリティチェック: 機密情報を含む可能性のある変数を制限
+        if (!IsValidIdentifier(name))
+            return $"エラー: 不正な環境変数名 '{name}'";
+
         var restrictedVars = new[] { "APIKEY", "SECRET", "PASSWORD", "TOKEN", "CREDENTIAL" };
 
         if (restrictedVars.Any(rv => name.ToUpperInvariant().Contains(rv)))
@@ -76,7 +78,7 @@ public class RestrictedPowerShellPlugin
             return $"エラー: '{name}' は機密情報の可能性があるため取得できません";
         }
 
-        var result = await _executor.ExecuteAsync($"[Environment]::GetEnvironmentVariable('{name}')");
+        var result = await _executor.ExecuteAsync($"[Environment]::GetEnvironmentVariable('{EscapePs(name)}')");
         return result.Success ? result.StandardOutput.Trim() : $"エラー: {result.StandardError}";
     }
 
@@ -84,7 +86,7 @@ public class RestrictedPowerShellPlugin
     public async Task<string> CreateDirectory(
         [Description("作成するディレクトリのパス")] string path)
     {
-        var result = await _executor.ExecuteAsync($"New-Item -ItemType Directory -Path '{path}' -Force");
+        var result = await _executor.ExecuteAsync($"New-Item -ItemType Directory -Path '{EscapePs(path)}' -Force");
         return result.Success
             ? $"成功: ディレクトリ '{path}' を作成しました"
             : $"エラー: {result.StandardError}";
@@ -94,7 +96,7 @@ public class RestrictedPowerShellPlugin
     public async Task<string> TestPath(
         [Description("確認するパス")] string path)
     {
-        var result = await _executor.ExecuteAsync($"Test-Path '{path}'");
+        var result = await _executor.ExecuteAsync($"Test-Path '{EscapePs(path)}'");
         var exists = result.Success && result.StandardOutput.Trim().Equals("True", StringComparison.OrdinalIgnoreCase);
         return $"パス '{path}' は{(exists ? "存在します" : "存在しません")}";
     }
@@ -106,10 +108,20 @@ public class RestrictedPowerShellPlugin
         [Description("コンテキスト行数")] int? contextLines = null)
     {
         var command = contextLines.HasValue
-            ? $"Select-String -Path '{filePath}' -Pattern '{pattern}' -Context {contextLines},{contextLines}"
-            : $"Select-String -Path '{filePath}' -Pattern '{pattern}'";
+            ? $"Select-String -Path '{EscapePs(filePath)}' -Pattern '{EscapePs(pattern)}' -Context {contextLines},{contextLines}"
+            : $"Select-String -Path '{EscapePs(filePath)}' -Pattern '{EscapePs(pattern)}'";
 
         var result = await _executor.ExecuteAsync(command);
         return result.Success ? result.StandardOutput : $"エラー: {result.StandardError}";
+    }
+
+    private static string EscapePs(string value)
+    {
+        return value.Replace("'", "''");
+    }
+
+    private static bool IsValidIdentifier(string name)
+    {
+        return !string.IsNullOrEmpty(name) && name.All(c => char.IsLetterOrDigit(c) || c == '_');
     }
 }

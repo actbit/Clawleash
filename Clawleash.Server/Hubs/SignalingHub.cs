@@ -39,7 +39,7 @@ public class SignalingHub : Hub
             });
 
             // Clean up connections
-            foreach (var kvp in _peerConnections)
+            foreach (var kvp in _peerConnections.ToList())
             {
                 if (kvp.Value == connectionId || kvp.Key.StartsWith(connectionId + "-"))
                 {

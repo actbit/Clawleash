@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Clawleash.Models;
@@ -25,7 +26,7 @@ public class AutonomousAgentService : IDisposable
 
     // イベントベースの承認（レガシーサポート）
     private readonly SemaphoreSlim _approvalLock = new(1, 1);
-    private TaskCompletionSource<bool>? _approvalTcs;
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _approvalTcsMap = new();
 
     public event EventHandler<ProgressEventArgs>? ProgressUpdated;
     public event EventHandler<ApprovalRequestEventArgs>? ApprovalRequired;
@@ -544,7 +545,8 @@ public class AutonomousAgentService : IDisposable
         await _approvalLock.WaitAsync();
         try
         {
-            _approvalTcs = new TaskCompletionSource<bool>();
+            var tcs = new TaskCompletionSource<bool>();
+            _approvalTcsMap[task.Id] = tcs;
 
             OnApprovalRequired(new ApprovalRequestEventArgs
             {
@@ -552,13 +554,14 @@ public class AutonomousAgentService : IDisposable
                 TaskDescription = task.Description,
                 DangerLevel = DetermineDangerLevel(task),
                 OperationType = DetermineOperationType(task),
-                ResponseTask = _approvalTcs
+                ResponseTask = tcs
             });
 
-            return await _approvalTcs.Task;
+            return await tcs.Task;
         }
         finally
         {
+            _approvalTcsMap.TryRemove(task.Id, out _);
             _approvalLock.Release();
         }
     }
@@ -568,7 +571,8 @@ public class AutonomousAgentService : IDisposable
     /// </summary>
     public void ApproveTask(string taskId)
     {
-        _approvalTcs?.TrySetResult(true);
+        if (_approvalTcsMap.TryGetValue(taskId, out var tcs))
+            tcs.TrySetResult(true);
     }
 
     /// <summary>
@@ -576,7 +580,8 @@ public class AutonomousAgentService : IDisposable
     /// </summary>
     public void RejectTask(string taskId)
     {
-        _approvalTcs?.TrySetResult(false);
+        if (_approvalTcsMap.TryGetValue(taskId, out var tcs))
+            tcs.TrySetResult(false);
     }
 
     /// <summary>
@@ -740,6 +745,7 @@ public class AutonomousAgentService : IDisposable
 
         _cancellationTokenSource?.Dispose();
         _approvalLock.Dispose();
+        _approvalTcsMap.Clear();
         _memoryManager.Dispose();
         _disposed = true;
     }

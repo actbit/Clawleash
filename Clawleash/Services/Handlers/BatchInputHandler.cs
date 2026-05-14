@@ -108,7 +108,7 @@ public class BatchInputHandler : IInputHandler
     /// <summary>
     /// ユーザーから指示を取得する（キューから取り出し）
     /// </summary>
-    public Task<InputResult> GetInputAsync(string? prompt = null, CancellationToken cancellationToken = default)
+    public async Task<InputResult> GetInputAsync(string? prompt = null, CancellationToken cancellationToken = default)
     {
         _isWaiting = true;
 
@@ -121,31 +121,31 @@ public class BatchInputHandler : IInputHandler
                 // 空の時のデフォルト動作
                 if (_settings.EmptyQueueBehavior == EmptyQueueBehavior.Exit)
                 {
-                    return Task.FromResult(new InputResult
+                    return new InputResult
                     {
                         Type = InputType.Command,
                         Text = "exit",
                         IsExitRequest = true
-                    });
+                    };
                 }
 
                 if (_settings.EmptyQueueBehavior == EmptyQueueBehavior.Wait)
                 {
                     // 指定時間待機
-                    Thread.Sleep(_settings.WaitTimeoutMs);
-                    return Task.FromResult(new InputResult
+                    await Task.Delay(_settings.WaitTimeoutMs, cancellationToken);
+                    return new InputResult
                     {
                         IsCancelled = true,
                         Text = string.Empty
-                    });
+                    };
                 }
 
                 // Cancel
-                return Task.FromResult(new InputResult
+                return new InputResult
                 {
                     IsCancelled = true,
                     Text = string.Empty
-                });
+                };
             }
 
             var command = _commandQueue.Dequeue();
@@ -170,10 +170,10 @@ public class BatchInputHandler : IInputHandler
             // コマンド間の遅延
             if (_settings.CommandDelayMs > 0)
             {
-                Thread.Sleep(_settings.CommandDelayMs);
+                await Task.Delay(_settings.CommandDelayMs, cancellationToken);
             }
 
-            return Task.FromResult(result);
+            return result;
         }
         finally
         {

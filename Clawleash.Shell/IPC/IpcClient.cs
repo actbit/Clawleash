@@ -66,6 +66,10 @@ public class IpcClient : IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "接続エラー");
+            _socket?.Dispose();
+            _socket = null;
+            _cts?.Dispose();
+            _cts = null;
             return false;
         }
     }

@@ -1,7 +1,8 @@
 // E2EE暗号化ユーティリティ
+// ECDH-P256鍵交換 + AES-256-GCM暗号化
 
 export class E2eeProvider {
-  private privateKey: Uint8Array | null = null;
+  private keyPair: CryptoKeyPair | null = null;
   private sessionKey: Uint8Array | null = null;
   private sessionId: string | null = null;
   private channelKeys: Map<string, Uint8Array> = new Map();
@@ -15,28 +16,24 @@ export class E2eeProvider {
   }
 
   async initialize(): Promise<void> {
-    this.privateKey = crypto.getRandomValues(new Uint8Array(32));
+    this.keyPair = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits']
+    );
   }
 
   async getPublicKey(): Promise<Uint8Array> {
-    if (!this.privateKey) {
+    if (!this.keyPair) {
       throw new Error('Not initialized');
     }
 
-    // SHA-256ベースの公開鍵導出
-    const hash = await crypto.subtle.digest('SHA-256', this.privateKey);
-    const publicKey = new Uint8Array(hash);
-
-    // Curve25519 adjustments
-    publicKey[0] &= 248;
-    publicKey[31] &= 127;
-    publicKey[31] |= 64;
-
-    return publicKey;
+    const exported = await crypto.subtle.exportKey('spki', this.keyPair.publicKey);
+    return new Uint8Array(exported);
   }
 
   async startKeyExchange(): Promise<{ sessionId: string; publicKey: string }> {
-    if (!this.privateKey) {
+    if (!this.keyPair) {
       await this.initialize();
     }
 
@@ -49,24 +46,30 @@ export class E2eeProvider {
   }
 
   async completeKeyExchange(peerPublicKeyBase64: string): Promise<void> {
-    if (!this.privateKey) {
+    if (!this.keyPair) {
       throw new Error('Not initialized');
     }
 
-    const peerPublicKey = this.base64ToArrayBuffer(peerPublicKeyBase64);
+    const peerPublicKeyBuffer = this.base64ToArrayBuffer(peerPublicKeyBase64);
+    const peerPublicKey = await crypto.subtle.importKey(
+      'spki',
+      peerPublicKeyBuffer,
+      { name: 'ECDH', namedCurve: 'P-256' },
+      false,
+      []
+    );
 
-    // 共有秘密を導出
-    const combined = new Uint8Array(64);
-    combined.set(this.privateKey, 0);
-    combined.set(new Uint8Array(peerPublicKey), 32);
+    // ECDH共有秘密を導出
+    const sharedBits = await crypto.subtle.deriveBits(
+      { name: 'ECDH', public: peerPublicKey },
+      this.keyPair.privateKey,
+      256
+    );
 
-    const hash = await crypto.subtle.digest('SHA-256', combined);
-    this.sessionKey = new Uint8Array(hash);
+    // SHA-256でハッシュ（サーバーのDeriveKeyFromHashと同じ処理）
+    this.sessionKey = new Uint8Array(await crypto.subtle.digest('SHA-256', sharedBits));
   }
 
-  /// <summary>
-  /// 暗号化されたチャンネル鍵を設定
-  /// </summary>
   async setChannelKey(channelId: string, encryptedKeyBase64: string): Promise<void> {
     if (!this.sessionKey) {
       throw new Error('Session key not established');
@@ -74,14 +77,12 @@ export class E2eeProvider {
 
     const encryptedData = this.base64ToArrayBuffer(encryptedKeyBase64);
 
-    // nonce(12) + ciphertext + tag(16) フォーマット
     const nonce = new Uint8Array(encryptedData.slice(0, 12));
     const ciphertextWithTag = new Uint8Array(encryptedData.slice(12));
     const ciphertextLength = ciphertextWithTag.length - 16;
     const ciphertext = ciphertextWithTag.slice(0, ciphertextLength);
     const tag = ciphertextWithTag.slice(ciphertextLength);
 
-    // セッション鍵でAES-GCM鍵をインポート
     const key = await crypto.subtle.importKey(
       'raw',
       this.sessionKey,
@@ -90,7 +91,6 @@ export class E2eeProvider {
       ['decrypt']
     );
 
-    // ciphertextとtagを結合して復号化
     const ciphertextFull = new Uint8Array(ciphertext.length + tag.length);
     ciphertextFull.set(ciphertext, 0);
     ciphertextFull.set(tag, ciphertext.length);
@@ -105,18 +105,12 @@ export class E2eeProvider {
     console.log(`Channel key set for ${channelId}`);
   }
 
-  /// <summary>
-  /// 平文のチャンネル鍵を設定（E2EE無効時）
-  /// </summary>
   setPlainChannelKey(channelId: string, plainKeyBase64: string): void {
     const channelKey = this.base64ToArrayBuffer(plainKeyBase64);
     this.channelKeys.set(channelId, new Uint8Array(channelKey));
     console.warn(`Plain channel key set for ${channelId} (E2EE disabled)`);
   }
 
-  /// <summary>
-  /// チャンネル鍵を使用して暗号化
-  /// </summary>
   async encrypt(plaintext: string, channelId?: string): Promise<string> {
     const keyToUse = channelId && this.channelKeys.has(channelId)
       ? this.channelKeys.get(channelId)!
@@ -129,10 +123,8 @@ export class E2eeProvider {
     const encoder = new TextEncoder();
     const plaintextBytes = encoder.encode(plaintext);
 
-    // Nonce (12 bytes)
     const nonce = crypto.getRandomValues(new Uint8Array(12));
 
-    // AES-GCM鍵をインポート
     const key = await crypto.subtle.importKey(
       'raw',
       keyToUse,
@@ -141,14 +133,13 @@ export class E2eeProvider {
       ['encrypt']
     );
 
-    // 暗号化
     const ciphertext = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv: nonce },
       key,
       plaintextBytes
     );
 
-    // nonce + ciphertext (ciphertextにはtagが含まれる)
+    // nonce(12) + ciphertext + tag
     const result = new Uint8Array(nonce.length + ciphertext.byteLength);
     result.set(nonce, 0);
     result.set(new Uint8Array(ciphertext), nonce.length);
@@ -156,9 +147,6 @@ export class E2eeProvider {
     return this.arrayBufferToBase64(result);
   }
 
-  /// <summary>
-  /// チャンネル鍵を使用して復号化
-  /// </summary>
   async decrypt(ciphertextBase64: string, channelId?: string): Promise<string> {
     const keyToUse = channelId && this.channelKeys.has(channelId)
       ? this.channelKeys.get(channelId)!
@@ -174,11 +162,9 @@ export class E2eeProvider {
       throw new Error('Ciphertext too short');
     }
 
-    // Extract nonce and ciphertext
     const nonce = data.slice(0, 12);
     const ciphertext = data.slice(12);
 
-    // AES-GCM鍵をインポート
     const key = await crypto.subtle.importKey(
       'raw',
       keyToUse,
@@ -187,7 +173,6 @@ export class E2eeProvider {
       ['decrypt']
     );
 
-    // 復号化
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: nonce },
       key,
@@ -203,7 +188,7 @@ export class E2eeProvider {
   }
 
   reset(): void {
-    this.privateKey = null;
+    this.keyPair = null;
     this.sessionKey = null;
     this.sessionId = null;
     this.channelKeys.clear();

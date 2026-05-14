@@ -610,10 +610,7 @@ public class McpClientManager : IDisposable
 
         if (root.TryGetProperty("result", out var result))
         {
-            // Cloneではなく、JSON文字列として保存してから再パース
-            // これによりメモリリークを防ぐ
-            var resultJson = result.GetRawText();
-            return JsonDocument.Parse(resultJson).RootElement;
+            return result.Clone();
         }
 
         return null;

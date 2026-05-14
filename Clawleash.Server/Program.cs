@@ -8,7 +8,7 @@ builder.Services.AddControllers();
 builder.Services.AddSignalR()
     .AddJsonProtocol(options =>
     {
-        options.PayloadSerializerOptions.PropertyNamingPolicy = null;
+        options.PayloadSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
     });
 
 // Add CORS for development
@@ -24,10 +24,20 @@ builder.Services.AddCors(options =>
 
     options.AddPolicy("ProductionPolicy", policy =>
     {
-        policy.WithOrigins(builder.Configuration["AllowedOrigins"] ?? "")
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials();
+        var origins = builder.Configuration["AllowedOrigins"];
+        if (!string.IsNullOrEmpty(origins))
+        {
+            policy.WithOrigins(origins)
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        }
+        else
+        {
+            policy.AllowAnyOrigin()
+                  .AllowAnyHeader()
+                  .AllowAnyMethod();
+        }
     });
 });
 
@@ -52,6 +62,9 @@ else
 // Static files (Svelte client)
 app.UseDefaultFiles();
 app.UseStaticFiles();
+
+// E2EE middleware for API routes
+app.UseMiddleware<E2eeMiddleware>();
 
 // API routes
 app.MapControllers();

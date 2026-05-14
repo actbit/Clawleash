@@ -141,7 +141,13 @@ public class RestrictedFileSystemPlugin
 
         try
         {
-            var directory = Path.GetDirectoryName(filePath);
+            var fullPath = Path.GetFullPath(filePath);
+            if (!_pathValidator.IsWritablePath(fullPath))
+            {
+                return $"エラー: ファイル '{fullPath}' への書き込みは許可されていません";
+            }
+
+            var directory = Path.GetDirectoryName(fullPath);
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
                 Directory.CreateDirectory(directory);
@@ -149,15 +155,15 @@ public class RestrictedFileSystemPlugin
 
             if (append)
             {
-                File.AppendAllText(filePath, content);
+                File.AppendAllText(fullPath, content);
             }
             else
             {
-                File.WriteAllText(filePath, content);
+                File.WriteAllText(fullPath, content);
             }
 
             var size = Encoding.UTF8.GetByteCount(content);
-            return $"成功: '{filePath}' に {size} バイトを書き込みました";
+            return $"成功: '{fullPath}' に {size} バイトを書き込みました";
         }
         catch (Exception ex)
         {

@@ -24,15 +24,15 @@ public class KeyManager
     {
         sessionId = Guid.NewGuid().ToString("N");
 
-        var privateKey = RandomNumberGenerator.GetBytes(32);
-        var publicKey = DerivePublicKey(privateKey);
+        var ecdh = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        var publicKey = ecdh.ExportSubjectPublicKeyInfo();
 
         lock (_lock)
         {
             _sessions[sessionId] = new SessionKeys
             {
                 SessionId = sessionId,
-                ServerPrivateKey = privateKey,
+                ServerEcdh = ecdh,
                 CreatedAt = DateTime.UtcNow
             };
         }
@@ -56,7 +56,11 @@ public class KeyManager
             }
 
             session.ClientPublicKey = clientPublicKey;
-            session.SharedSecret = DeriveSharedSecret(session.ServerPrivateKey, clientPublicKey);
+
+            using var peerEcdh = ECDiffieHellman.Create();
+            peerEcdh.ImportSubjectPublicKeyInfo(clientPublicKey, out _);
+            session.SharedSecret = session.ServerEcdh.DeriveKeyFromHash(
+                peerEcdh.PublicKey, HashAlgorithmName.SHA256, null, null);
             session.CompletedAt = DateTime.UtcNow;
 
             _logger.LogInformation("Key exchange completed for session {SessionId}", sessionId);
@@ -81,7 +85,13 @@ public class KeyManager
     {
         lock (_lock)
         {
-            _sessions.Remove(sessionId);
+            if (_sessions.TryGetValue(sessionId, out var session))
+            {
+                if (session.SharedSecret != null)
+                    CryptographicOperations.ZeroMemory(session.SharedSecret);
+                session.ServerEcdh.Dispose();
+                _sessions.Remove(sessionId);
+            }
             _logger.LogDebug("Session removed: {SessionId}", sessionId);
         }
     }
@@ -101,9 +111,13 @@ public class KeyManager
                 .Select(kvp => kvp.Key)
                 .ToList();
 
-            foreach (var sessionId in expiredSessions)
+            foreach (var sid in expiredSessions)
             {
-                _sessions.Remove(sessionId);
+                var session = _sessions[sid];
+                if (session.SharedSecret != null)
+                    CryptographicOperations.ZeroMemory(session.SharedSecret);
+                session.ServerEcdh.Dispose();
+                _sessions.Remove(sid);
                 expiredCount++;
             }
         }
@@ -114,32 +128,10 @@ public class KeyManager
         }
     }
 
-    private static byte[] DerivePublicKey(byte[] privateKey)
-    {
-        using var sha256 = SHA256.Create();
-        var publicKey = sha256.ComputeHash(privateKey);
-
-        // Curve25519 adjustments
-        publicKey[0] &= 248;
-        publicKey[31] &= 127;
-        publicKey[31] |= 64;
-
-        return publicKey;
-    }
-
-    private static byte[] DeriveSharedSecret(byte[] privateKey, byte[] peerPublicKey)
-    {
-        using var sha256 = SHA256.Create();
-        var combined = new byte[64];
-        Buffer.BlockCopy(privateKey, 0, combined, 0, 32);
-        Buffer.BlockCopy(peerPublicKey, 0, combined, 32, 32);
-        return sha256.ComputeHash(combined);
-    }
-
     private class SessionKeys
     {
         public string SessionId { get; set; } = string.Empty;
-        public byte[] ServerPrivateKey { get; set; } = Array.Empty<byte>();
+        public ECDiffieHellman ServerEcdh { get; set; } = null!;
         public byte[]? ClientPublicKey { get; set; }
         public byte[]? SharedSecret { get; set; }
         public DateTime CreatedAt { get; set; }

@@ -32,19 +32,17 @@ public partial class BrowserManager : IBrowserManager
 
     private async Task EnsureInitializedAsync()
     {
-        if (_browser != null && _page != null)
+        if (_page != null)
         {
             return;
         }
 
-        _playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-
-        _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+        _playwright ??= await Microsoft.Playwright.Playwright.CreateAsync();
+        _browser ??= await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
         {
             Headless = _settings.Browser.Headless
         });
-
-        _context = await _browser.NewContextAsync(new BrowserNewContextOptions
+        _context ??= await _browser.NewContextAsync(new BrowserNewContextOptions
         {
             ViewportSize = new ViewportSize { Width = 1920, Height = 1080 },
             UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -134,9 +132,9 @@ public partial class BrowserManager : IBrowserManager
                 });
             }
         }
-        catch
+        catch (PlaywrightException ex)
         {
-            // アクセシビリティツリーの取得に失敗した場合はスキップ
+            System.Diagnostics.Debug.WriteLine($"Accessibility tree extraction failed: {ex.Message}");
         }
 
         return new BrowserState
@@ -425,8 +423,9 @@ public partial class BrowserManager : IBrowserManager
                 ScreenshotBase64 = screenshotBase64
             };
         }
-        catch (Exception)
+        catch (PlaywrightException ex)
         {
+            System.Diagnostics.Debug.WriteLine($"Scrape failed for {url}: {ex.Message}");
             return new ScrapeResult
             {
                 Url = url,

@@ -1,10 +1,12 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
 namespace Clawleash.Server.Security;
 
 /// <summary>
-/// E2EE検証ミドルウェア（オプション）
+/// E2EE検証ミドルウェア
+/// HMAC-SHA256による鍵所有証明を検証
 /// </summary>
 public class E2eeMiddleware
 {
@@ -21,21 +23,59 @@ public class E2eeMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Check for E2EE header
         if (context.Request.Headers.TryGetValue("X-E2EE-Session", out var sessionId))
         {
             var session = sessionId.ToString();
             var sharedSecret = _keyManager.GetSharedSecret(session);
 
-            if (sharedSecret != null)
+            if (sharedSecret == null)
             {
-                context.Items["E2eeSessionId"] = session;
-                context.Items["E2eeEnabled"] = true;
-                _logger.LogDebug("E2EE session verified: {SessionId}", session);
+                _logger.LogWarning("E2EE session not found: {SessionId}", session);
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
             }
+
+            if (!context.Request.Headers.TryGetValue("X-E2EE-HMAC", out var providedHmac))
+            {
+                _logger.LogWarning("E2EE HMAC missing for session: {SessionId}", session);
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
+            var computedHmac = ComputeSessionHmac(sharedSecret, session);
+            var providedHmacBytes = TryDecodeHex(providedHmac.ToString());
+
+            if (providedHmacBytes == null || !CryptographicOperations.FixedTimeEquals(providedHmacBytes, computedHmac))
+            {
+                _logger.LogWarning("E2EE HMAC verification failed for session: {SessionId}", session);
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
+            context.Items["E2eeSessionId"] = session;
+            context.Items["E2eeEnabled"] = true;
+            _logger.LogDebug("E2EE session verified: {SessionId}", session);
         }
 
         await _next(context);
+    }
+
+    internal static byte[] ComputeSessionHmac(byte[] sharedSecret, string sessionId)
+    {
+        using var hmac = new HMACSHA256(sharedSecret);
+        return hmac.ComputeHash(Encoding.UTF8.GetBytes(sessionId));
+    }
+
+    private static byte[]? TryDecodeHex(string hex)
+    {
+        try
+        {
+            return Convert.FromHexString(hex);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
 

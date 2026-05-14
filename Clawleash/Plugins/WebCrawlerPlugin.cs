@@ -83,7 +83,8 @@ public class WebCrawlerPlugin
     {
         try
         {
-            var result = await _browserManager.CrawlAsync(startUrl, maxPages, maxDepth);
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            var result = await _browserManager.CrawlAsync(startUrl, maxPages, maxDepth, cts.Token);
 
             if (!result.Success)
             {

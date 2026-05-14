@@ -95,12 +95,11 @@ public class WebRtcChatInterface : IChatInterface
                 await RegisterAsync();
             };
 
-            _hubConnection.Closed += exception =>
+            _hubConnection.Closed += async exception =>
             {
                 _isConnected = false;
-                ClearAllPeerConnections();
+                await ClearAllPeerConnectionsAsync();
                 _logger?.LogWarning(exception, "Connection to signaling hub closed");
-                return Task.CompletedTask;
             };
 
             _logger?.LogInformation("Connecting to WebRTC signaling server: {Url}", _settings.SignalingServerUrl);
@@ -588,7 +587,7 @@ public class WebRtcChatInterface : IChatInterface
             peerId, _activeConnections);
     }
 
-    private void ClearAllPeerConnections()
+    private async Task ClearAllPeerConnectionsAsync()
     {
         lock (_connectionLock)
         {
@@ -600,7 +599,8 @@ public class WebRtcChatInterface : IChatInterface
         {
             try
             {
-                kvp.Value.CloseAsync().Wait(TimeSpan.FromSeconds(5));
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await kvp.Value.CloseAsync();
             }
             catch (Exception ex)
             {
@@ -713,7 +713,7 @@ public class WebRtcChatInterface : IChatInterface
                 await _hubConnection.StopAsync(cancellationToken);
             }
 
-            ClearAllPeerConnections();
+            await ClearAllPeerConnectionsAsync();
             _isConnected = false;
             _logger?.LogInformation("WebRTC interface stopped");
         }

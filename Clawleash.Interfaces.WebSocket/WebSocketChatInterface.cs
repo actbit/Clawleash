@@ -383,7 +383,8 @@ public class WebSocketChatInterface : IChatInterface
 
         _disposed = true;
         await StopAsync();
-        _hubConnection?.DisposeAsync();
+        if (_hubConnection != null)
+            await _hubConnection.DisposeAsync();
         _cts?.Dispose();
     }
 

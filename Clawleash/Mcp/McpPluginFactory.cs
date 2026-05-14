@@ -95,7 +95,9 @@ public static class McpPluginFactory
                 {
                     foreach (var req in required.EnumerateArray())
                     {
-                        requiredParams.Add(req.GetString() ?? "");
+                        var name = req.GetString();
+                        if (!string.IsNullOrEmpty(name))
+                            requiredParams.Add(name);
                     }
                 }
 

@@ -185,7 +185,7 @@ public class CliApprovalHandler : ICliApprovalHandler
 
             var choice = line.Trim().ToUpperInvariant()[0];
 
-            return choice switch
+            var result = choice switch
             {
                 'Y' => new ApprovalResult
                 {
@@ -216,10 +216,17 @@ public class CliApprovalHandler : ICliApprovalHandler
                     Approved = true,
                     Action = ApprovalAction.Approve,
                     Comment = "常に許可"
-                    // TODO: AlwaysApprove パターンの記録
                 },
-                _ => await HandleInvalidChoice(output)
+                _ => null
             };
+
+            if (result != null)
+            {
+                return result;
+            }
+
+            await output.WriteLineAsync("無効な選択です。Y, N, S, C, A のいずれかを入力してください。");
+            await output.FlushAsync();
         }
 
         return new ApprovalResult
@@ -228,14 +235,6 @@ public class CliApprovalHandler : ICliApprovalHandler
             Action = ApprovalAction.Cancel,
             Comment = "タイムアウト"
         };
-    }
-
-    private async Task<ApprovalResult> HandleInvalidChoice(TextWriter output)
-    {
-        await output.WriteLineAsync("無効な選択です。Y, N, S, C, A のいずれかを入力してください。");
-        await output.FlushAsync();
-        // ループを続けるために特別な結果を返さない
-        throw new InvalidOperationException("Invalid choice - should retry");
     }
 
     private static string GetOperationTypeDisplay(OperationType type)
